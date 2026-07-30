@@ -874,8 +874,23 @@ export class McpHub {
 			}
 			this.connections.push(connection)
 
-			// Connect (this will automatically start the transport)
-			await client.connect(transport)
+			// Connect with per-server configurable timeout
+			const connectTimeoutMs = (configInjected.timeout ?? 60) * 1000
+			const connectResult = await Promise.race([
+				client.connect(transport).then(() => "connected" as const),
+				new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), connectTimeoutMs)),
+			])
+
+			if (connectResult === "timeout") {
+				// Server unreachable or too slow — treat as disconnected, don't block other servers
+				const errorMsg = `Connection to MCP server "${name}" timed out after ${configInjected.timeout ?? 60}s`
+				console.warn(errorMsg)
+				connection.server.status = "disconnected"
+				connection.server.error = errorMsg
+				this.appendErrorMessage(connection, errorMsg, "warn")
+				return
+			}
+
 			connection.server.status = "connected"
 			connection.server.error = ""
 			connection.server.instructions = client.getInstructions()
@@ -885,13 +900,14 @@ export class McpHub {
 			connection.server.resources = await this.fetchResourcesList(name, source)
 			connection.server.resourceTemplates = await this.fetchResourceTemplatesList(name, source)
 		} catch (error) {
-			// Update status with error
+			// Update status with error, but don't re-throw — a single failing
+			// MCP server should not block the rest of extension initialization
 			const connection = this.findConnection(name, source)
 			if (connection) {
 				connection.server.status = "disconnected"
 				this.appendErrorMessage(connection, error instanceof Error ? error.message : `${error}`)
 			}
-			throw error
+			console.error(`[McpHub] Failed to connect to MCP server "${name}":`, error)
 		}
 	}
 

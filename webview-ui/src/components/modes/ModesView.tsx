@@ -70,6 +70,7 @@ const ModesView = () => {
 		customModePrompts,
 		listApiConfigMeta,
 		currentApiConfigName,
+		modeApiConfigs,
 		mode,
 		customInstructions,
 		setCustomInstructions,
@@ -885,7 +886,7 @@ const ModesView = () => {
 						)}
 					</div>
 
-					{/* API Configuration - Moved Here */}
+					{/* API Configuration - Per-mode binding */}
 					<div className="mb-3">
 						<div className="font-bold mb-1">{t("prompts:apiConfiguration.title")}</div>
 						<div className="text-sm text-vscode-descriptionForeground mb-2">
@@ -893,7 +894,16 @@ const ModesView = () => {
 						</div>
 						<div className="mb-2">
 							<Select
-								value={currentApiConfigName}
+								value={(() => {
+									// Per-mode: resolve mode → config_id → config_name
+									const savedId = modeApiConfigs?.[visualMode]
+									if (savedId) {
+										const match = listApiConfigMeta?.find((c) => c.id === savedId)
+										if (match) return match.name
+									}
+									// Fallback: use global current when no per-mode binding
+									return currentApiConfigName ?? ""
+								})()}
 								onValueChange={(value) => {
 									vscode.postMessage({
 										type: "loadApiConfiguration",

@@ -1,4 +1,4 @@
-// npx vitest run src/__tests__/index.test.ts
+﻿// npx vitest run src/__tests__/index.test.ts
 
 import { generatePackageJson } from "../index.js"
 
@@ -26,19 +26,19 @@ describe("generatePackageJson", () => {
 						"roo-cline-ActivityBar": [
 							{
 								type: "webview",
-								id: "roo-cline.SidebarProvider",
+								id: "shinyboy.SidebarProvider",
 								name: "",
 							},
 						],
 					},
 					commands: [
 						{
-							command: "roo-cline.plusButtonClicked",
+							command: "shinyboy.plusButtonClicked",
 							title: "%command.newTask.title%",
 							icon: "$(edit)",
 						},
 						{
-							command: "roo-cline.openInNewTab",
+							command: "shinyboy.openInNewTab",
 							title: "%command.openInNewTab.title%",
 							category: "%configuration.title%",
 						},
@@ -46,29 +46,29 @@ describe("generatePackageJson", () => {
 					menus: {
 						"editor/context": [
 							{
-								submenu: "roo-cline.contextMenu",
+								submenu: "shinyboy.contextMenu",
 								group: "navigation",
 							},
 						],
-						"roo-cline.contextMenu": [
+						"shinyboy.contextMenu": [
 							{
-								command: "roo-cline.addToContext",
+								command: "shinyboy.addToContext",
 								group: "1_actions@1",
 							},
 						],
 						"editor/title": [
 							{
-								command: "roo-cline.plusButtonClicked",
+								command: "shinyboy.plusButtonClicked",
 								group: "navigation@1",
 								when: "activeWebviewPanelId == roo-cline.TabPanelProvider",
 							},
 							{
-								command: "roo-cline.settingsButtonClicked",
+								command: "shinyboy.settingsButtonClicked",
 								group: "navigation@6",
 								when: "activeWebviewPanelId == roo-cline.TabPanelProvider",
 							},
 							{
-								command: "roo-cline.accountButtonClicked",
+								command: "shinyboy.accountButtonClicked",
 								group: "navigation@6",
 								when: "activeWebviewPanelId == roo-cline.TabPanelProvider",
 							},
@@ -76,18 +76,18 @@ describe("generatePackageJson", () => {
 					},
 					submenus: [
 						{
-							id: "roo-cline.contextMenu",
+							id: "shinyboy.contextMenu",
 							label: "%views.contextMenu.label%",
 						},
 						{
-							id: "roo-cline.terminalMenu",
+							id: "shinyboy.terminalMenu",
 							label: "%views.terminalMenu.label%",
 						},
 					],
 					configuration: {
 						title: "%configuration.title%",
 						properties: {
-							"roo-cline.allowedCommands": {
+							"shinyboy.allowedCommands": {
 								type: "array",
 								items: {
 									type: "string",
@@ -95,7 +95,7 @@ describe("generatePackageJson", () => {
 								default: ["npm test", "npm install", "tsc", "git log", "git diff", "git show"],
 								description: "%commands.allowedCommands.description%",
 							},
-							"roo-cline.customStoragePath": {
+							"shinyboy.customStoragePath": {
 								type: "string",
 								default: "",
 								description: "%settings.customStoragePath.description%",

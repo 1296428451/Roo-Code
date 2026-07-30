@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react"
 import { Trans } from "react-i18next"
-import { ArrowLeft, Brain } from "lucide-react"
+import { ArrowLeft, ArrowRight, Brain } from "lucide-react"
 
 import { openRouterDefaultModelId, type ProviderSettings } from "@roo-code/types"
 
@@ -77,6 +77,20 @@ const WelcomeViewProvider = () => {
 		})
 	}, [showProviderSetup, apiConfiguration, setApiConfiguration, effectiveApiConfiguration, currentApiConfigName])
 
+	const handleSkipSetup = useCallback(() => {
+		// Skip API configuration for now — enter with no key
+		const minimalConfig: ProviderSettings = {
+			apiProvider: "openrouter",
+			openRouterModelId: openRouterDefaultModelId,
+		}
+		setErrorMessage(undefined)
+		vscode.postMessage({
+			type: "upsertApiConfiguration",
+			text: currentApiConfigName,
+			apiConfiguration: minimalConfig,
+		})
+	}, [currentApiConfigName])
+
 	if (!showProviderSetup) {
 		return (
 			<Tab>
@@ -93,6 +107,9 @@ const WelcomeViewProvider = () => {
 					<div className="mt-2 flex gap-2 items-center">
 						<Button onClick={handleGetStarted} variant="primary">
 							{t("welcome:landing.getStarted")}
+						</Button>
+						<Button onClick={handleSkipSetup} variant="secondary">
+							{t("welcome:landing.skip")} <ArrowRight className="size-4" />
 						</Button>
 					</div>
 
@@ -136,6 +153,9 @@ const WelcomeViewProvider = () => {
 					</Button>
 					<Button onClick={handleGetStarted} variant="primary">
 						{t("welcome:providerSignup.finish")} →
+					</Button>
+					<Button onClick={handleSkipSetup} variant="secondary">
+						{t("welcome:providerSignup.skip")} <ArrowRight className="size-4" />
 					</Button>
 				</div>
 			</TabContent>
