@@ -16,7 +16,6 @@ import {
 	qwenCodeModels,
 	sambaNovaModels,
 	vertexModels,
-	vscodeLlmModels,
 	xaiModels,
 	internationalZAiModels,
 	minimaxModels,
@@ -619,7 +618,7 @@ export const MODELS_BY_PROVIDER: Record<
 	"vscode-lm": {
 		id: "vscode-lm",
 		label: "VS Code LM API",
-		models: Object.keys(vscodeLlmModels),
+		models: [],
 	},
 	xai: { id: "xai", label: "xAI (Grok)", models: Object.keys(xaiModels) },
 	zai: { id: "zai", label: "Z.ai", models: Object.keys(internationalZAiModels) },

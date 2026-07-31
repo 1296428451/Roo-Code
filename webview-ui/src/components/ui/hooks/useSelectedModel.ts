@@ -299,8 +299,8 @@ function getSelectedModel({
 				? `${apiConfiguration.vsCodeLmModelSelector.vendor}/${apiConfiguration.vsCodeLmModelSelector.family}`
 				: vscodeLlmDefaultModelId
 			const modelFamily = apiConfiguration?.vsCodeLmModelSelector?.family ?? vscodeLlmDefaultModelId
-			const info = vscodeLlmModels[modelFamily as keyof typeof vscodeLlmModels]
-			return { id, info: { ...openAiModelInfoSaneDefaults, ...info, supportsImages: false } } // VSCode LM API currently doesn't support images.
+			const info = vscodeLlmModels[modelFamily]
+			return { id, info: { ...openAiModelInfoSaneDefaults, ...info, supportsImages: false } }
 		}
 		case "sambanova": {
 			const id = apiConfiguration.apiModelId ?? defaultModelId

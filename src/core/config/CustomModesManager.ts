@@ -45,13 +45,7 @@ interface ImportResult {
 }
 
 export class CustomModesManager {
-	private static readonly cacheTTL = 10_000
-
 	private disposables: vscode.Disposable[] = []
-	private isWriting = false
-	private writeQueue: Array<() => Promise<void>> = []
-	private cachedModes: ModeConfig[] | null = null
-	private cachedAt: number = 0
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
@@ -60,34 +54,6 @@ export class CustomModesManager {
 		this.watchCustomModesFiles().catch((error) => {
 			console.error("[CustomModesManager] Failed to setup file watchers:", error)
 		})
-	}
-
-	private async queueWrite(operation: () => Promise<void>): Promise<void> {
-		this.writeQueue.push(operation)
-
-		if (!this.isWriting) {
-			await this.processWriteQueue()
-		}
-	}
-
-	private async processWriteQueue(): Promise<void> {
-		if (this.isWriting || this.writeQueue.length === 0) {
-			return
-		}
-
-		this.isWriting = true
-
-		try {
-			while (this.writeQueue.length > 0) {
-				const operation = this.writeQueue.shift()
-
-				if (operation) {
-					await operation()
-				}
-			}
-		} finally {
-			this.isWriting = false
-		}
 	}
 
 	private async getWorkspaceRoomodes(): Promise<string | undefined> {
@@ -252,7 +218,7 @@ export class CustomModesManager {
 		const fileExists = await fileExistsAtPath(filePath)
 
 		if (!fileExists) {
-			await this.queueWrite(() => fs.writeFile(filePath, yaml.stringify({ customModes: [] }, { lineWidth: 0 })))
+			await fs.writeFile(filePath, yaml.stringify({ customModes: [] }, { lineWidth: 0 }))
 		}
 
 		return filePath
@@ -301,7 +267,6 @@ export class CustomModesManager {
 				// Merge modes from both sources (.roomodes takes precedence)
 				const mergedModes = await this.mergeCustomModes(roomodesModes, result.data.customModes)
 				await this.context.globalState.update("customModes", mergedModes)
-				this.clearCache()
 				await this.onUpdate()
 			} catch (error) {
 				console.error(`[CustomModesManager] Error handling settings file change:`, error)
@@ -327,7 +292,6 @@ export class CustomModesManager {
 					// .roomodes takes precedence
 					const mergedModes = await this.mergeCustomModes(roomodesModes, settingsModes)
 					await this.context.globalState.update("customModes", mergedModes)
-					this.clearCache()
 					await this.onUpdate()
 				} catch (error) {
 					console.error(`[CustomModesManager] Error handling .roomodes file change:`, error)
@@ -342,7 +306,6 @@ export class CustomModesManager {
 					try {
 						const settingsModes = await this.loadModesFromFile(settingsPath)
 						await this.context.globalState.update("customModes", settingsModes)
-						this.clearCache()
 						await this.onUpdate()
 					} catch (error) {
 						console.error(`[CustomModesManager] Error handling .roomodes file deletion:`, error)
@@ -354,49 +317,22 @@ export class CustomModesManager {
 	}
 
 	public async getCustomModes(): Promise<ModeConfig[]> {
-		// Check if we have a valid cached result.
-		const now = Date.now()
-
-		if (this.cachedModes && now - this.cachedAt < CustomModesManager.cacheTTL) {
-			return this.cachedModes
-		}
-
-		// Get modes from settings file.
 		const settingsPath = await this.getCustomModesFilePath()
 		const settingsModes = await this.loadModesFromFile(settingsPath)
 
-		// Get modes from .roomodes if it exists.
 		const roomodesPath = await this.getWorkspaceRoomodes()
 		const roomodesModes = roomodesPath ? await this.loadModesFromFile(roomodesPath) : []
 
-		// Create maps to store modes by source.
-		const projectModes = new Map<string, ModeConfig>()
-		const globalModes = new Map<string, ModeConfig>()
+		const projectSlugs = new Set(roomodesModes.map((mode) => mode.slug))
 
-		// Add project modes (they take precedence).
-		for (const mode of roomodesModes) {
-			projectModes.set(mode.slug, { ...mode, source: "project" as const })
-		}
-
-		// Add global modes.
-		for (const mode of settingsModes) {
-			if (!projectModes.has(mode.slug)) {
-				globalModes.set(mode.slug, { ...mode, source: "global" as const })
-			}
-		}
-
-		// Combine modes in the correct order: project modes first, then global modes.
 		const mergedModes = [
 			...roomodesModes.map((mode) => ({ ...mode, source: "project" as const })),
 			...settingsModes
-				.filter((mode) => !projectModes.has(mode.slug))
+				.filter((mode) => !projectSlugs.has(mode.slug))
 				.map((mode) => ({ ...mode, source: "global" as const })),
 		]
 
 		await this.context.globalState.update("customModes", mergedModes)
-
-		this.cachedModes = mergedModes
-		this.cachedAt = now
 
 		return mergedModes
 	}
@@ -438,22 +374,18 @@ export class CustomModesManager {
 				targetPath = await this.getCustomModesFilePath()
 			}
 
-			await this.queueWrite(async () => {
-				// Ensure source is set correctly based on target file.
-				const modeWithSource = {
-					...config,
-					source: isProjectMode ? ("project" as const) : ("global" as const),
-				}
+			const modeWithSource = {
+				...config,
+				source: isProjectMode ? ("project" as const) : ("global" as const),
+			}
 
-				await this.updateModesInFile(targetPath, (modes) => {
-					const updatedModes = modes.filter((m) => m.slug !== slug)
-					updatedModes.push(modeWithSource)
-					return updatedModes
-				})
-
-				this.clearCache()
-				await this.refreshMergedState()
+			await this.updateModesInFile(targetPath, (modes) => {
+				const updatedModes = modes.filter((m) => m.slug !== slug)
+				updatedModes.push(modeWithSource)
+				return updatedModes
 			})
+
+			await this.refreshMergedState()
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error)
 			logger.error("Failed to update custom mode", { slug, error: errorMessage })
@@ -503,8 +435,6 @@ export class CustomModesManager {
 
 		await this.context.globalState.update("customModes", mergedModes)
 
-		this.clearCache()
-
 		await this.onUpdate()
 	}
 
@@ -527,26 +457,22 @@ export class CustomModesManager {
 			// Determine which mode to use for rules folder path calculation
 			const modeToDelete = projectMode || globalMode
 
-			await this.queueWrite(async () => {
-				// Delete from project first if it exists there
-				if (projectMode && roomodesPath) {
-					await this.updateModesInFile(roomodesPath, (modes) => modes.filter((m) => m.slug !== slug))
-				}
+			// Delete from project first if it exists there
+			if (projectMode && roomodesPath) {
+				await this.updateModesInFile(roomodesPath, (modes) => modes.filter((m) => m.slug !== slug))
+			}
 
-				// Delete from global settings if it exists there
-				if (globalMode) {
-					await this.updateModesInFile(settingsPath, (modes) => modes.filter((m) => m.slug !== slug))
-				}
+			// Delete from global settings if it exists there
+			if (globalMode) {
+				await this.updateModesInFile(settingsPath, (modes) => modes.filter((m) => m.slug !== slug))
+			}
 
-				// Delete associated rules folder
-				if (modeToDelete) {
-					await this.deleteRulesFolder(slug, modeToDelete)
-				}
+			// Delete associated rules folder
+			if (modeToDelete) {
+				await this.deleteRulesFolder(slug, modeToDelete)
+			}
 
-				// Clear cache when modes are deleted
-				this.clearCache()
-				await this.refreshMergedState()
-			})
+			await this.refreshMergedState()
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error)
 			vscode.window.showErrorMessage(t("common:customModes.errors.deleteFailed", { error: errorMessage }))
@@ -605,7 +531,6 @@ export class CustomModesManager {
 			const filePath = await this.getCustomModesFilePath()
 			await fs.writeFile(filePath, yaml.stringify({ customModes: [] }, { lineWidth: 0 }))
 			await this.context.globalState.update("customModes", [])
-			this.clearCache()
 			await this.onUpdate()
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error)
@@ -997,11 +922,6 @@ export class CustomModesManager {
 			logger.error("Failed to import mode with rules", { error: errorMessage })
 			return { success: false, error: errorMessage }
 		}
-	}
-
-	private clearCache(): void {
-		this.cachedModes = null
-		this.cachedAt = 0
 	}
 
 	dispose(): void {
