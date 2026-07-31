@@ -2560,7 +2560,15 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 		}
 		case "requestCommands": {
 			try {
-				const commandList = await getDiscoveredCommands()
+				const { getCommands } = await import("../../services/command/commands")
+				const commands = await getCommands(getCurrentCwd() || "")
+				const commandList = commands.map((command) => ({
+					name: command.name,
+					source: command.source,
+					filePath: command.filePath,
+					description: command.description,
+					argumentHint: command.argumentHint,
+				}))
 				await provider.postMessageToWebview({ type: "commands", commands: commandList })
 			} catch (error) {
 				provider.log(`Error fetching commands: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`)

@@ -1,23 +1,11 @@
 import type OpenAI from "openai"
 
-const SEARCH_REPLACE_DESCRIPTION = `Use this tool to propose a search and replace operation on an existing file.
+const SEARCH_REPLACE_DESCRIPTION = `Perform a search and replace operation on an existing file, replacing ONE occurrence of old_string with new_string.
 
-The tool will replace ONE occurrence of old_string with new_string in the specified file.
-
-CRITICAL REQUIREMENTS FOR USING THIS TOOL:
-
-1. UNIQUENESS: The old_string MUST uniquely identify the specific instance you want to change. This means:
-   - Include AT LEAST 3-5 lines of context BEFORE the change point
-   - Include AT LEAST 3-5 lines of context AFTER the change point
-   - Include all whitespace, indentation, and surrounding code exactly as it appears in the file
-
-2. SINGLE INSTANCE: This tool can only change ONE instance at a time. If you need to change multiple instances:
-   - Make separate calls to this tool for each instance
-   - Each call must uniquely identify its specific instance using extensive context
-
-3. VERIFICATION: Before using this tool:
-   - If multiple instances exist, gather enough context to uniquely identify each one
-   - Plan separate tool calls for each instance`
+Requirements:
+- Uniqueness: old_string must uniquely identify the target instance. Include at least 3-5 lines of context before and after the change point, preserving all whitespace, indentation, and surrounding code exactly as in the file.
+- Single instance: One change per call. For multiple instances, make separate calls with sufficient context to uniquely identify each.
+- Verification: Before use, ensure each instance can be uniquely identified and plan separate calls accordingly.`
 
 const search_replace = {
 	type: "function",

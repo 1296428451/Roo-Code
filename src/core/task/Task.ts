@@ -68,6 +68,7 @@ import { ClineAskResponse } from "../../shared/WebviewMessage"
 import { defaultModeSlug, getModeBySlug } from "../../shared/modes"
 import { DiffStrategy, type ToolUse, type ToolParamName, toolParamNames } from "../../shared/tools"
 import { getModelMaxOutputTokens } from "../../shared/api"
+import { GlobalFileNames } from "../../shared/globalFileNames"
 
 // services
 import { McpHub } from "../../services/mcp/McpHub"
@@ -86,6 +87,7 @@ import { calculateApiCostAnthropic, calculateApiCostOpenAI } from "../../shared/
 import { getWorkspacePath } from "../../utils/path"
 import { sanitizeToolUseId } from "../../utils/tool-id"
 import { getTaskDirectoryPath } from "../../utils/storage"
+import { safeWriteJson } from "../../utils/safeWriteJson"
 
 // prompts
 import { formatResponse } from "../prompts/responses"
@@ -3679,7 +3681,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			enableSubfolderRules,
 		} = state ?? {}
 
-		return await (async () => {
+		const prompt = await (async () => {
 			const provider = this.providerRef.deref()
 
 			if (!provider) {
@@ -3716,6 +3718,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				provider.getSkillsManager(),
 			)
 		})()
+
+		void safeWriteJson(
+			path.join(this.globalStoragePath, "tasks", this.taskId, GlobalFileNames.systemPrompt),
+			{ systemPrompt: prompt, ts: Date.now(), mode: mode ?? defaultModeSlug },
+		)
+
+		return prompt
 	}
 
 	private getCurrentProfileId(state: any): string {

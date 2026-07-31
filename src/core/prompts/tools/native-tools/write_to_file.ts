@@ -1,14 +1,11 @@
 import type OpenAI from "openai"
 
-const WRITE_TO_FILE_DESCRIPTION = `Request to write content to a file. This tool is primarily used for creating new files or for scenarios where a complete rewrite of an existing file is intentionally required. If the file exists, it will be overwritten. If it doesn't exist, it will be created. This tool will automatically create any directories needed to write the file.
+const WRITE_TO_FILE_DESCRIPTION = `Write content to a file. Used for creating new files or intentionally overwriting existing ones. Overwrites if exists, creates if not. Automatically creates required directories.
 
-**Important:** You should prefer using other editing tools over write_to_file when making changes to existing files, since write_to_file is slower and cannot handle large files. Use write_to_file primarily for new file creation.
-
-When using this tool, use it directly with the desired content. You do not need to display the content before using the tool. ALWAYS provide the COMPLETE file content in your response. This is NON-NEGOTIABLE. Partial updates or placeholders like '// rest of code unchanged' are STRICTLY FORBIDDEN. Failure to do so will result in incomplete or broken code.
-
-When creating a new project, organize all new files within a dedicated project directory unless the user specifies otherwise. Structure the project logically, adhering to best practices for the specific type of project being created.
-
-Example: Writing a configuration file
+Prefer other editing tools for modifying existing files—write_to_file is slower and cannot handle large files. Use primarily for new file creation.
+Write content directly—no need to display it beforehand. Must provide COMPLETE file content (partial updates or placeholders are forbidden).
+When creating a new project, place all files in a dedicated project directory unless specified, and structure according to best practices.
+Example:
 { "path": "frontend-config.json", "content": "{\\n  \\"apiEndpoint\\": \\"https://api.example.com\\",\\n  \\"theme\\": {\\n    \\"primaryColor\\": \\"#007bff\\"\\n  }\\n}" }`
 
 const PATH_PARAMETER_DESCRIPTION = `The path of the file to write to (relative to the current workspace directory)`

@@ -1,15 +1,13 @@
 import type OpenAI from "openai"
 
-const LIST_FILES_DESCRIPTION = `Request to list files and directories within the specified directory. If recursive is true, it will list all files and directories recursively. If recursive is false or not provided, it will only list the top-level contents. Do not use this tool to confirm the existence of files you may have created, as the user will let you know if the files were created successfully or not.
+const LIST_FILES_DESCRIPTION = `Request to list files and directories in the specified directory. If recursive is true, list all recursively; if false or not provided, list only top-level contents. Do not use this tool to confirm existence of files you created; the user will inform you.
 
 Parameters:
-- path: (required) The path of the directory to list contents for (relative to the current workspace directory)
-- recursive: (required) Whether to list files recursively. Use true for recursive listing, false for top-level only.
+- path: (required) Directory path (relative to current workspace)
+- recursive: (required) true for recursive listing, false for top-level only
 
-Example: Listing all files in the current directory (top-level only)
+Examples:
 { "path": ".", "recursive": false }
-
-Example: Listing all files recursively in src directory
 { "path": "src", "recursive": true }`
 
 const PATH_PARAMETER_DESCRIPTION = `Directory path to inspect, relative to the workspace`
