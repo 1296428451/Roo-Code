@@ -331,7 +331,17 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			}
 
 			const start = Date.now()
-			await this.git.clean("f", ["-d", "-f"])
+			// Use raw git to handle clean errors gracefully (e.g., "nul" on Windows)
+			try {
+				await this.git.clean("f", ["-d"])
+			} catch (cleanError) {
+				// Ignore "nul" permission errors on Windows - they're not critical for restore
+				const errorMsg = cleanError instanceof Error ? cleanError.message : String(cleanError)
+				if (!errorMsg.includes("nul") && !errorMsg.includes("Permission denied")) {
+					throw cleanError
+				}
+				this.log(`[${this.constructor.name}#restoreCheckpoint] clean warning (ignored): ${errorMsg}`)
+			}
 			await this.git.reset(["--hard", commitHash])
 
 			// Remove all checkpoints after the specified commitHash.

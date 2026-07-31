@@ -28,6 +28,8 @@
 		"could_not_open_file_generic": "Could not open file!",
 		"checkpoint_timeout": "Timed out when attempting to restore checkpoint.",
 		"checkpoint_failed": "Failed to restore checkpoint.",
+		"checkpoint_service_unavailable": "Checkpoint service is not available. Checkpoints may have been disabled due to an error.",
+		"checkpoint_message_not_found": "Checkpoint message not found in conversation history.",
 		"git_not_installed": "Git is required for the checkpoints feature. Please install Git to enable checkpoints.",
 		"checkpoint_no_first": "No first checkpoint to compare.",
 		"checkpoint_no_previous": "No previous checkpoint to compare.",

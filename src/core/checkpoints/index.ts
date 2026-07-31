@@ -124,6 +124,15 @@ export async function getCheckpointService(task: Task, { interval = 250 }: { int
 		log(`[Task#getCheckpointService] ${err.message}`)
 		task.enableCheckpoints = false
 		task.checkpointServiceInitializing = false
+
+		// Show user notification for checkpoint initialization failure
+		if (err.message.includes("Cannot use checkpoints")) {
+			vscode.window.showErrorMessage(err.message)
+		} else if (task.checkpointTimeout) {
+			vscode.window.showErrorMessage(
+				`${t("common:errors.checkpoint_failed")} ${err.message}`,
+			)
+		}
 		return undefined
 	}
 }
@@ -238,12 +247,14 @@ export async function checkpointRestore(
 	const service = await getCheckpointService(task)
 
 	if (!service) {
+		vscode.window.showErrorMessage(t("common:errors.checkpoint_service_unavailable"))
 		return
 	}
 
 	const index = task.clineMessages.findIndex((m) => m.ts === ts)
 
 	if (index === -1) {
+		vscode.window.showErrorMessage(t("common:errors.checkpoint_message_not_found"))
 		return
 	}
 
@@ -294,6 +305,7 @@ export async function checkpointRestore(
 	} catch (err) {
 		provider?.log("[checkpointRestore] disabling checkpoints for this task")
 		task.enableCheckpoints = false
+		vscode.window.showErrorMessage(t("common:errors.checkpoint_failed"))
 	}
 }
 
