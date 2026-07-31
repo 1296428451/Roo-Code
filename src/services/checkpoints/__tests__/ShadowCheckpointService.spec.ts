@@ -379,7 +379,7 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 		})
 
 		describe(`${klass.name}#hasNestedGitRepositories`, () => {
-			it("throws error when nested git repositories are detected during initialization", async () => {
+			it("succeeds when nested git repositories are detected (should exclude them)", async () => {
 				// Create a new temporary workspace and service for this test.
 				const shadowDir = path.join(tmpDir, `${prefix}-nested-git-${Date.now()}`)
 				const workspaceDir = path.join(tmpDir, `workspace-nested-git-${Date.now()}`)
@@ -437,11 +437,13 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 
 				const service = new klass(taskId, shadowDir, workspaceDir, () => {})
 
-				// Verify that initialization throws an error when nested git repos are detected
-				// The error message now includes the specific path of the nested repository
-				await expect(service.initShadowGit()).rejects.toThrowError(
-					/Checkpoints are disabled because a nested git repository was detected at:/,
-				)
+				// Verify that initialization succeeds even when nested git repos are detected
+				// The nested git repositories should be automatically excluded
+				await expect(service.initShadowGit()).resolves.not.toThrow()
+
+				// Verify that the nested git paths were detected and stored
+				expect(service.nestedGitPaths).toBeDefined()
+				expect(service.nestedGitPaths.length).toBe(1)
 
 				// Clean up.
 				vitest.restoreAllMocks()

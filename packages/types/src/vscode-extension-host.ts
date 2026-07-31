@@ -281,6 +281,7 @@ export type ExtensionState = Pick<
 	| "enterBehavior"
 	| "includeCurrentTime"
 	| "includeCurrentCost"
+	| "includeDirectoryDetails"
 	| "maxGitStatusFiles"
 	| "requestDelaySeconds"
 	| "showWorktreesInHomeScreen"

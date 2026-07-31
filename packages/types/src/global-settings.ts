@@ -129,6 +129,11 @@ export const globalSettingsSchema = z.object({
 	 */
 	includeCurrentCost: z.boolean().optional(),
 	/**
+	 * Whether to include directory details (workspace files list) in the environment details
+	 * @default true
+	 */
+	includeDirectoryDetails: z.boolean().optional(),
+	/**
 	 * Maximum number of git status file entries to include in the environment details.
 	 * Set to 0 to disable git status. The header (branch, commits) is always included when > 0.
 	 * @default 0

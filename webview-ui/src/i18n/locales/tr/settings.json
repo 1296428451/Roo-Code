@@ -657,6 +657,10 @@
 			"label": "Mevcut maliyeti bağlama dahil et",
 			"description": "Etkinleştirildiğinde, mevcut API kullanım maliyeti sistem istemine dahil edilecektir. Modeller maliyet endişeleri nedeniyle çalışmayı durdurursa bunu devre dışı bırakın."
 		},
+		"includeDirectoryDetails": {
+			"label": "Dizin ayrıntılarını bağlama dahil et",
+			"description": "Etkinleştirildiğinde, çalışma alanı dosyaları listesi ilk istekte sistem istemine dahil edilecektir. Bağlam boyutunu azaltmak için devre dışı bırakın."
+		},
 		"maxGitStatusFiles": {
 			"label": "Git durumu maks. dosya",
 			"description": "Git durum bağlamına dahil edilecek maksimum dosya girişi sayısı. Devre dışı bırakmak için 0 olarak ayarlayın. Dal bilgisi ve commit'ler > 0 olduğunda her zaman gösterilir."

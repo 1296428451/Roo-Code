@@ -2429,7 +2429,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		getCheckpointService(this)
 
 		let nextUserContent = userContent
-		let includeFileDetails = true
+		const provider = this.providerRef.deref()
+		const state = provider ? await provider.getState() : undefined
+		const includeDirectoryDetails = state?.includeDirectoryDetails ?? true
+		let includeFileDetails = includeDirectoryDetails
 
 		this.emit(RooCodeEventName.TaskStarted)
 
@@ -2563,7 +2566,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				}
 			}
 
-			const environmentDetails = await getEnvironmentDetails(this, currentIncludeFileDetails)
+			// Only add environment details if this is the first user message in the conversation.
+			// This prevents adding redundant environment details on every request.
+			const shouldIncludeEnvironmentDetails = !this.apiConversationHistory.some((msg) => msg.role === "user")
 
 			// Remove any existing environment_details blocks before adding fresh ones.
 			// This prevents duplicate environment details when resuming tasks,
@@ -2583,8 +2588,14 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			})
 
 			// Add environment details as its own text block, separate from tool
-			// results.
-			let finalUserContent = [...contentWithoutEnvDetails, { type: "text" as const, text: environmentDetails }]
+			// results. Only include if this is the first user message.
+			let finalUserContent: Anthropic.Messages.ContentBlockParam[]
+			if (shouldIncludeEnvironmentDetails) {
+				const environmentDetails = await getEnvironmentDetails(this, currentIncludeFileDetails)
+				finalUserContent = [...contentWithoutEnvDetails, { type: "text" as const, text: environmentDetails }]
+			} else {
+				finalUserContent = contentWithoutEnvDetails
+			}
 			// Only add user message to conversation history if:
 			// 1. This is the first attempt (retryAttempt === 0), AND
 			// 2. The original userContent was not empty (empty signals delegation resume where

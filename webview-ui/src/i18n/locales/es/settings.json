@@ -657,6 +657,10 @@
 			"label": "Incluir costo actual en el contexto",
 			"description": "Cuando está habilitado, el costo de uso actual de la API se incluirá en el prompt del sistema. Deshabilítelo si los modelos dejan de funcionar por problemas de costos."
 		},
+		"includeDirectoryDetails": {
+			"label": "Incluir detalles del directorio en el contexto",
+			"description": "Cuando está habilitado, la lista de archivos del espacio de trabajo se incluirá en el prompt del sistema en la primera solicitud. Deshabilítelo para reducir el tamaño del contexto."
+		},
 		"maxGitStatusFiles": {
 			"label": "Git status máx. archivos",
 			"description": "Número máximo de entradas de archivo para incluir en el contexto de estado de git. Establézcalo en 0 para deshabilitar. La información de la rama y los commits siempre se muestran cuando es > 0."

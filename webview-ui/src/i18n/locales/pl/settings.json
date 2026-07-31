@@ -657,6 +657,10 @@
 			"label": "Uwzględnij bieżący koszt w kontekście",
 			"description": "Gdy włączone, bieżący koszt użycia API zostanie uwzględniony w promptcie systemowym. Wyłącz, jeśli modele przestają działać z powodu problemów z kosztami."
 		},
+		"includeDirectoryDetails": {
+			"label": "Uwzględnij szczegóły katalogu w kontekście",
+			"description": "Gdy włączone, lista plików obszaru roboczego zostanie uwzględniona w monitcie systemowym przy pierwszym żądaniu. Wyłącz, aby zmniejszyć rozmiar kontekstu."
+		},
 		"maxGitStatusFiles": {
 			"label": "Git status maks. plików",
 			"description": "Maksymalna liczba wpisów plików do uwzględnienia w kontekście statusu git. Ustaw na 0, aby wyłączyć. Informacje o gałęzi i zatwierdzenia są zawsze pokazywane, gdy > 0."

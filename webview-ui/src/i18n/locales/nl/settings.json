@@ -657,6 +657,10 @@
 			"label": "Huidige kosten opnemen in context",
 			"description": "Indien ingeschakeld, worden de huidige API-gebruikskosten opgenomen in de systeemprompt. Schakel dit uit als modellen stoppen met werken vanwege kostenproblemen."
 		},
+		"includeDirectoryDetails": {
+			"label": "Mapdetails opnemen in context",
+			"description": "Indien ingeschakeld, wordt de lijst met werkruimtebestanden opgenomen in de systeemprompt bij de eerste aanvraag. Schakel dit uit om de contextgrootte te verkleinen."
+		},
 		"maxGitStatusFiles": {
 			"label": "Git status max bestanden",
 			"description": "Maximum aantal bestandsvermeldingen dat in de git-statuscontext moet worden opgenomen. Stel in op 0 om uit te schakelen. Branch-info en commits worden altijd getoond wanneer > 0."

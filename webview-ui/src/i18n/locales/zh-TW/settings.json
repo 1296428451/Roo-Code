@@ -667,6 +667,10 @@
 			"label": "在上下文中包含目前成本",
 			"description": "啟用後，目前 API 使用成本將包含在系統提示中。如果模型因成本問題停止工作，請停用此選項。"
 		},
+		"includeDirectoryDetails": {
+			"label": "在上下文中包含目錄詳情",
+			"description": "啟用後，工作區檔案列表將在首次請求時包含在系統提示中。停用此選項可減少上下文大小。"
+		},
 		"maxGitStatusFiles": {
 			"label": "Git 狀態最大檔案數",
 			"description": "git status 上下文中包含的最大檔案條目數。設為 0 會停用。當值 > 0 時，會一律顯示分支資訊。"

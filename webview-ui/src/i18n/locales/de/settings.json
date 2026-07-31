@@ -657,6 +657,10 @@
 			"label": "Aktuelle Kosten in den Kontext einbeziehen",
 			"description": "Wenn aktiviert, werden die aktuellen API-Nutzungskosten in den System-Prompt aufgenommen. Deaktiviere diese Option, wenn Modelle aufgrund von Kostenbedenken die Arbeit einstellen."
 		},
+		"includeDirectoryDetails": {
+			"label": "Verzeichnisdetails in den Kontext einbeziehen",
+			"description": "Wenn aktiviert, wird die Liste der Arbeitsbereichsdateien bei der ersten Anfrage in die Systemaufforderung aufgenommen. Deaktivieren, um die Kontextgröße zu reduzieren."
+		},
 		"maxGitStatusFiles": {
 			"label": "Git-Status max. Dateien",
 			"description": "Maximale Anzahl von Dateieinträgen, die in den Git-Status-Kontext aufgenommen werden sollen. Auf 0 setzen, um zu deaktivieren. Branch-Informationen und Commits werden immer angezeigt, wenn > 0."

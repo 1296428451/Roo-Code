@@ -200,6 +200,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 		enterBehavior,
 		includeCurrentTime,
 		includeCurrentCost,
+		includeDirectoryDetails,
 		maxGitStatusFiles,
 	} = cachedState
 
@@ -402,6 +403,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 					enterBehavior: enterBehavior ?? "send",
 					includeCurrentTime: includeCurrentTime ?? true,
 					includeCurrentCost: includeCurrentCost ?? true,
+					includeDirectoryDetails: includeDirectoryDetails ?? true,
 					maxGitStatusFiles: maxGitStatusFiles ?? 0,
 					profileThresholds,
 					imageGenerationProvider,
@@ -829,6 +831,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 								writeDelayMs={writeDelayMs}
 								includeCurrentTime={includeCurrentTime}
 								includeCurrentCost={includeCurrentCost}
+								includeDirectoryDetails={includeDirectoryDetails}
 								maxGitStatusFiles={maxGitStatusFiles}
 								customSupportPrompts={customSupportPrompts || {}}
 								setCustomSupportPrompts={setCustomSupportPromptsField}

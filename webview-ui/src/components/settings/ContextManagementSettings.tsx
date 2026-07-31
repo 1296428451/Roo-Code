@@ -41,6 +41,7 @@ type ContextManagementSettingsProps = HTMLAttributes<HTMLDivElement> & {
 	writeDelayMs: number
 	includeCurrentTime?: boolean
 	includeCurrentCost?: boolean
+	includeDirectoryDetails?: boolean
 	maxGitStatusFiles?: number
 	customSupportPrompts: Record<string, string | undefined>
 	setCustomSupportPrompts: (prompts: Record<string, string | undefined>) => void
@@ -59,6 +60,7 @@ type ContextManagementSettingsProps = HTMLAttributes<HTMLDivElement> & {
 		| "writeDelayMs"
 		| "includeCurrentTime"
 		| "includeCurrentCost"
+		| "includeDirectoryDetails"
 		| "maxGitStatusFiles"
 	>
 }
@@ -80,6 +82,7 @@ export const ContextManagementSettings = ({
 	writeDelayMs,
 	includeCurrentTime,
 	includeCurrentCost,
+	includeDirectoryDetails,
 	maxGitStatusFiles,
 	customSupportPrompts,
 	setCustomSupportPrompts,
@@ -437,6 +440,23 @@ export const ContextManagementSettings = ({
 					</VSCodeCheckbox>
 					<div className="text-vscode-descriptionForeground text-sm mt-1 mb-3">
 						{t("settings:contextManagement.includeCurrentCost.description")}
+					</div>
+				</SearchableSetting>
+
+				<SearchableSetting
+					settingId="context-include-directory-details"
+					section="contextManagement"
+					label={t("settings:contextManagement.includeDirectoryDetails.label")}>
+					<VSCodeCheckbox
+						checked={includeDirectoryDetails}
+						onChange={(e: any) => setCachedStateField("includeDirectoryDetails", e.target.checked)}
+						data-testid="include-directory-details-checkbox">
+						<label className="block font-medium mb-1">
+							{t("settings:contextManagement.includeDirectoryDetails.label")}
+						</label>
+					</VSCodeCheckbox>
+					<div className="text-vscode-descriptionForeground text-sm mt-1 mb-3">
+						{t("settings:contextManagement.includeDirectoryDetails.description")}
 					</div>
 				</SearchableSetting>
 			</Section>
