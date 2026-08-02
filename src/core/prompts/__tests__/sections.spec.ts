@@ -1,7 +1,6 @@
 import { addCustomInstructions } from "../sections/custom-instructions"
 import { getCapabilitiesSection } from "../sections/capabilities"
 import { getRulesSection, getCommandChainOperator } from "../sections/rules"
-import { McpHub } from "../../../services/mcp/McpHub"
 import * as shellUtils from "../../../utils/shell"
 
 describe("addCustomInstructions", () => {
@@ -32,40 +31,23 @@ describe("addCustomInstructions", () => {
 })
 
 describe("getCapabilitiesSection", () => {
-	const cwd = "/test/path"
-
 	it("includes standard capabilities", () => {
-		const result = getCapabilitiesSection(cwd)
+		const result = getCapabilitiesSection()
 
 		expect(result).toContain("CAPABILITIES")
 		expect(result).toContain("execute CLI commands")
 		expect(result).toContain("list files")
 		expect(result).toContain("read and write files")
 	})
-
-	it("includes MCP reference when mcpHub is provided", () => {
-		const mockMcpHub = {} as McpHub
-		const result = getCapabilitiesSection(cwd, mockMcpHub)
-
-		expect(result).toContain("MCP servers")
-	})
-
-	it("excludes MCP reference when mcpHub is undefined", () => {
-		const result = getCapabilitiesSection(cwd, undefined)
-
-		expect(result).not.toContain("MCP servers")
-	})
 })
 
 describe("getRulesSection", () => {
-	const cwd = "/test/path"
-
 	it("includes standard rules", () => {
-		const result = getRulesSection(cwd)
+		const result = getRulesSection()
 
 		expect(result).toContain("RULES")
 		expect(result).toContain("project base directory")
-		expect(result).toContain(cwd)
+		expect(result).toContain("current workspace directory")
 	})
 
 	it("includes vendor confidentiality section when isStealthModel is true", () => {
@@ -76,7 +58,7 @@ describe("getRulesSection", () => {
 			isStealthModel: true,
 		}
 
-		const result = getRulesSection(cwd, settings)
+		const result = getRulesSection(settings)
 
 		expect(result).toContain("VENDOR CONFIDENTIALITY")
 		expect(result).toContain("Never reveal the vendor or company that created you")
@@ -93,7 +75,7 @@ describe("getRulesSection", () => {
 			isStealthModel: false,
 		}
 
-		const result = getRulesSection(cwd, settings)
+		const result = getRulesSection(settings)
 
 		expect(result).not.toContain("VENDOR CONFIDENTIALITY")
 		expect(result).not.toContain("Never reveal the vendor or company")
@@ -106,7 +88,7 @@ describe("getRulesSection", () => {
 			newTaskRequireTodos: false,
 		}
 
-		const result = getRulesSection(cwd, settings)
+		const result = getRulesSection(settings)
 
 		expect(result).not.toContain("VENDOR CONFIDENTIALITY")
 		expect(result).not.toContain("Never reveal the vendor or company")
@@ -153,15 +135,13 @@ describe("getCommandChainOperator", () => {
 })
 
 describe("getRulesSection shell-aware command chaining", () => {
-	const cwd = "/test/path"
-
 	afterEach(() => {
 		vi.restoreAllMocks()
 	})
 
 	it("uses && for Unix shells in command chaining example", () => {
 		vi.spyOn(shellUtils, "getShell").mockReturnValue("/bin/bash")
-		const result = getRulesSection(cwd)
+		const result = getRulesSection()
 
 		expect(result).toContain("cd (path to project) && (command")
 		expect(result).not.toContain("cd (path to project) ; (command")
@@ -172,7 +152,7 @@ describe("getRulesSection shell-aware command chaining", () => {
 		vi.spyOn(shellUtils, "getShell").mockReturnValue(
 			"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
 		)
-		const result = getRulesSection(cwd)
+		const result = getRulesSection()
 
 		expect(result).toContain("cd (path to project) ; (command")
 		expect(result).toContain("Note: Using `;` for PowerShell command chaining")
@@ -180,7 +160,7 @@ describe("getRulesSection shell-aware command chaining", () => {
 
 	it("uses && for cmd.exe in command chaining example", () => {
 		vi.spyOn(shellUtils, "getShell").mockReturnValue("C:\\Windows\\System32\\cmd.exe")
-		const result = getRulesSection(cwd)
+		const result = getRulesSection()
 
 		expect(result).toContain("cd (path to project) && (command")
 		expect(result).toContain("Note: Using `&&` for cmd.exe command chaining")
@@ -190,7 +170,7 @@ describe("getRulesSection shell-aware command chaining", () => {
 		vi.spyOn(shellUtils, "getShell").mockReturnValue(
 			"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
 		)
-		const result = getRulesSection(cwd)
+		const result = getRulesSection()
 
 		expect(result).toContain("IMPORTANT: When using PowerShell, avoid Unix-specific utilities")
 		expect(result).toContain("`sed`, `grep`, `awk`, `cat`, `rm`, `cp`, `mv`")
@@ -201,7 +181,7 @@ describe("getRulesSection shell-aware command chaining", () => {
 
 	it("includes Unix utility guidance for cmd.exe", () => {
 		vi.spyOn(shellUtils, "getShell").mockReturnValue("C:\\Windows\\System32\\cmd.exe")
-		const result = getRulesSection(cwd)
+		const result = getRulesSection()
 
 		expect(result).toContain("IMPORTANT: When using cmd.exe, avoid Unix-specific utilities")
 		expect(result).toContain("`sed`, `grep`, `awk`, `cat`, `rm`, `cp`, `mv`")
@@ -212,7 +192,7 @@ describe("getRulesSection shell-aware command chaining", () => {
 
 	it("does not include Unix utility guidance for Unix shells", () => {
 		vi.spyOn(shellUtils, "getShell").mockReturnValue("/bin/bash")
-		const result = getRulesSection(cwd)
+		const result = getRulesSection()
 
 		expect(result).not.toContain("IMPORTANT: When using PowerShell")
 		expect(result).not.toContain("IMPORTANT: When using cmd.exe")
@@ -221,7 +201,7 @@ describe("getRulesSection shell-aware command chaining", () => {
 
 	it("does not include note for Unix shells", () => {
 		vi.spyOn(shellUtils, "getShell").mockReturnValue("/bin/zsh")
-		const result = getRulesSection(cwd)
+		const result = getRulesSection()
 
 		expect(result).not.toContain("Note: Using")
 	})

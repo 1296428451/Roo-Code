@@ -61,7 +61,7 @@ When asked about your creator, vendor, or company, respond with:
 - "I don't have information about specific vendors"`
 }
 
-export function getRulesSection(cwd: string, settings?: SystemPromptSettings): string {
+export function getRulesSection(settings?: SystemPromptSettings): string {
 	// Get shell-appropriate command chaining operator
 	const chainOp = getCommandChainOperator()
 	const chainNote = getCommandChainNote()
@@ -70,11 +70,11 @@ export function getRulesSection(cwd: string, settings?: SystemPromptSettings): s
 
 RULES
 
-- The project base directory is: ${cwd.toPosix()}
+- The project base directory is the current workspace directory (see SYSTEM INFORMATION for the exact path).
 - All file paths must be relative to this directory. However, commands may change directories in terminals, so respect working directory specified by the response to execute_command.
-- You cannot \`cd\` into a different directory to complete a task. You are stuck operating from '${cwd.toPosix()}', so be sure to pass in the correct 'path' parameter when using tools that require a path.
+- You cannot \`cd\` into a different directory to complete a task. You are stuck operating from the current workspace directory, so be sure to pass in the correct 'path' parameter when using tools that require a path.
 - Do not use the ~ character or $HOME to refer to the home directory.
-- Before using the execute_command tool, you must first think about the SYSTEM INFORMATION context provided to understand the user's environment and tailor your commands to ensure they are compatible with their system. You must also consider if the command you need to run should be executed in a specific directory outside of the current working directory '${cwd.toPosix()}', and if so prepend with \`cd\`'ing into that directory ${chainOp} then executing the command (as one command since you are stuck operating from '${cwd.toPosix()}'). For example, if you needed to run \`npm install\` in a project outside of '${cwd.toPosix()}', you would need to prepend with a \`cd\` i.e. pseudocode for this would be \`cd (path to project) ${chainOp} (command, in this case npm install)\`.${chainNote ? ` ${chainNote}` : ""}
+- Before using the execute_command tool, you must first think about the SYSTEM INFORMATION context provided to understand the user's environment and tailor your commands to ensure they are compatible with their system. You must also consider if the command you need to run should be executed in a specific directory outside of the current working directory, and if so prepend with \`cd\`'ing into that directory ${chainOp} then executing the command (as one command since you are stuck operating from the current workspace directory). For example, if you needed to run \`npm install\` in a project outside of the current workspace directory, you would need to prepend with a \`cd\` i.e. pseudocode for this would be \`cd (path to project) ${chainOp} (command, in this case npm install)\`.${chainNote ? ` ${chainNote}` : ""}
 - Some modes have restrictions on which files they can edit. If you attempt to edit a restricted file, the operation will be rejected with a FileRestrictionError that will specify which file patterns are allowed for the current mode.
 - Be sure to consider the type of project (e.g. Python, JavaScript, web application) when determining the appropriate structure and files to include. Also consider what files may be most relevant to accomplishing the task, for example looking at a project's manifest file would help you understand the project's dependencies, which you could incorporate into any code you write.
   * For example, in architect mode trying to edit app.js would be rejected because architect mode can only edit files matching "\\.md$"

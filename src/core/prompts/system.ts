@@ -78,10 +78,10 @@ ${getSharedToolUseSection()}${toolsCatalog}
 
 	${getToolUseGuidelinesSection()}
 
-${getCapabilitiesSection(cwd)}
+${getCapabilitiesSection()}
 
 ${modesSection}
-${getRulesSection(cwd, settings)}
+${getRulesSection(settings)}
 
 ${getSystemInfoSection(cwd)}
 
