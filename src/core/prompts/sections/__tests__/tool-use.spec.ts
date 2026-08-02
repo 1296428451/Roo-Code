@@ -11,7 +11,6 @@ describe("getSharedToolUseSection", () => {
 	it("should include multiple tools per message guidance", () => {
 		const section = getSharedToolUseSection()
 
-		expect(section).toContain("You must call at least one tool per assistant response")
 		expect(section).toContain("Prefer calling as many tools as are reasonably needed")
 	})
 

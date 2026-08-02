@@ -39,21 +39,6 @@ export const formatResponse = {
 			suggestion: "Try to continue without this file, or ask the user to update the .rooignore file",
 		}),
 
-	noToolsUsed: () => {
-		const instructions = getToolInstructionsReminder()
-
-		return `[ERROR] You did not use a tool in your previous response! Please retry with a tool use.
-
-${instructions}
-
-# Next Steps
-
-If you have completed the user's task, use the attempt_completion tool.
-If you require additional information from the user, use the ask_followup_question tool.
-Otherwise, if you have not completed the task and do not need additional information, then proceed with the next step of the task.
-(This is an automated message, so do not respond to it conversationally.)`
-	},
-
 	tooManyMistakes: (feedback?: string) =>
 		JSON.stringify({
 			status: "guidance",

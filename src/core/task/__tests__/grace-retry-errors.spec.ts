@@ -235,41 +235,6 @@ describe("Grace Retry Error Handling", () => {
 
 			expect(task.consecutiveNoAssistantMessagesCount).toBe(0)
 		})
-
-		it("should reset consecutiveNoToolUseCount when abortTask is called", async () => {
-			const task = new Task({
-				provider: mockProvider,
-				apiConfiguration: mockApiConfig,
-				task: "test task",
-				startTask: false,
-			})
-
-			// Manually set both counters
-			task.consecutiveNoAssistantMessagesCount = 3
-			task.consecutiveNoToolUseCount = 4
-
-			// Mock dispose to prevent actual cleanup
-			vi.spyOn(task, "dispose").mockImplementation(() => {})
-
-			await task.abortTask()
-
-			// Both counters should be reset
-			expect(task.consecutiveNoAssistantMessagesCount).toBe(0)
-			expect(task.consecutiveNoToolUseCount).toBe(0)
-		})
-	})
-
-	describe("consecutiveNoToolUseCount", () => {
-		it("should initialize to 0", () => {
-			const task = new Task({
-				provider: mockProvider,
-				apiConfiguration: mockApiConfig,
-				task: "test task",
-				startTask: false,
-			})
-
-			expect(task.consecutiveNoToolUseCount).toBe(0)
-		})
 	})
 
 	describe("Grace Retry Pattern", () => {
@@ -412,28 +377,6 @@ describe("Grace Retry Error Handling", () => {
 
 			// Verify the exact marker is used
 			expect(saySpy).toHaveBeenCalledWith("error", "MODEL_NO_ASSISTANT_MESSAGES")
-		})
-	})
-
-	describe("Parallel with noToolsUsed error handling", () => {
-		it("should have separate counters for noToolsUsed and noAssistantMessages", () => {
-			const task = new Task({
-				provider: mockProvider,
-				apiConfiguration: mockApiConfig,
-				task: "test task",
-				startTask: false,
-			})
-
-			// Both counters should start at 0
-			expect(task.consecutiveNoToolUseCount).toBe(0)
-			expect(task.consecutiveNoAssistantMessagesCount).toBe(0)
-
-			// Incrementing one should not affect the other
-			task.consecutiveNoToolUseCount = 3
-			expect(task.consecutiveNoAssistantMessagesCount).toBe(0)
-
-			task.consecutiveNoAssistantMessagesCount = 2
-			expect(task.consecutiveNoToolUseCount).toBe(3)
 		})
 	})
 })
