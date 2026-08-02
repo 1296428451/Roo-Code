@@ -118,6 +118,31 @@ export class CodeIndexManager {
 		await this.context.globalState.update("codeIndexAutoEnableDefault", enabled)
 	}
 
+	private _indexWorkspacePathKey(): string {
+		return "codeIndexWorkspacePath:" + this._folderUri.toString(true)
+	}
+
+	public get indexWorkspacePath(): string | undefined {
+		return this.context.workspaceState.get<string | undefined>(this._indexWorkspacePathKey(), undefined)
+	}
+
+	public async setIndexWorkspacePath(workspacePath: string | undefined): Promise<void> {
+		if (workspacePath) {
+			const normalizedPath = path.normalize(workspacePath)
+			await this.context.workspaceState.update(this._indexWorkspacePathKey(), normalizedPath)
+		} else {
+			await this.context.workspaceState.update(this._indexWorkspacePathKey(), undefined)
+		}
+	}
+
+	/**
+	 * Returns the effective workspace path for indexing.
+	 * If a custom index workspace path is set, it will be used instead of the default workspace path.
+	 */
+	public get effectiveWorkspacePath(): string | undefined {
+		return this.indexWorkspacePath || this.workspacePath
+	}
+
 	public get onProgressUpdate() {
 		return this._stateManager.onProgressUpdate
 	}
@@ -189,7 +214,7 @@ export class CodeIndexManager {
 
 		// 5. CacheManager Initialization
 		if (!this._cacheManager) {
-			this._cacheManager = new CacheManager(this.context, this.workspacePath)
+			this._cacheManager = new CacheManager(this.context, this.effectiveWorkspacePath!)
 			await this._cacheManager.initialize()
 		}
 
@@ -329,6 +354,7 @@ export class CodeIndexManager {
 			workspacePath: this.workspacePath,
 			workspaceEnabled: this.isWorkspaceEnabled,
 			autoEnableDefault: this.autoEnableDefault,
+			indexWorkspacePath: this.indexWorkspacePath,
 		}
 	}
 
@@ -353,20 +379,21 @@ export class CodeIndexManager {
 		this._orchestrator = undefined
 		this._searchService = undefined
 
-		// (Re)Initialize service factory
-		this._serviceFactory = new CodeIndexServiceFactory(
-			this._configManager!,
-			this.workspacePath,
-			this._cacheManager!,
-		)
-
-		const ignoreInstance = ignore()
-		const workspacePath = this.workspacePath
+		const workspacePath = this.effectiveWorkspacePath
 
 		if (!workspacePath) {
 			this._stateManager.setSystemState("Standby", "")
 			return
 		}
+
+		// (Re)Initialize service factory
+		this._serviceFactory = new CodeIndexServiceFactory(
+			this._configManager!,
+			workspacePath,
+			this._cacheManager!,
+		)
+
+		const ignoreInstance = ignore()
 
 		// Create .gitignore instance
 		const ignorePath = path.join(workspacePath, ".gitignore")
@@ -403,7 +430,7 @@ export class CodeIndexManager {
 		this._orchestrator = new CodeIndexOrchestrator(
 			this._configManager!,
 			this._stateManager,
-			this.workspacePath,
+			this.effectiveWorkspacePath,
 			this._cacheManager!,
 			vectorStore,
 			scanner,
@@ -446,7 +473,7 @@ export class CodeIndexManager {
 				try {
 					// Ensure cacheManager is initialized before recreating services
 					if (!this._cacheManager) {
-						this._cacheManager = new CacheManager(this.context, this.workspacePath)
+						this._cacheManager = new CacheManager(this.context, this.effectiveWorkspacePath!)
 						await this._cacheManager.initialize()
 					}
 

@@ -208,7 +208,10 @@
 		"stoppingButton": "正在停止...",
 		"workspaceToggleLabel": "为此工作区启用索引",
 		"workspaceDisabledMessage": "索引已配置，但尚未为此工作区启用。",
-		"autoEnableDefaultLabel": "自动为新工作区启用索引"
+		"autoEnableDefaultLabel": "自动为新工作区启用索引",
+		"indexWorkspacePathLabel": "索引工作区路径",
+		"indexWorkspacePathPlaceholder": "输入索引库的自定义工作区路径",
+		"indexWorkspacePathDescription": "设置索引库的自定义目录路径。留空则使用默认工作区路径。"
 	},
 	"autoApprove": {
 		"toggleShortcut": "您可以<SettingsLink>在 IDE 首选项中</SettingsLink>为此设置配置全局快捷方式。",

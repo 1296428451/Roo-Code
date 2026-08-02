@@ -467,6 +467,7 @@ export interface WebviewMessage {
 		| "indexingStatusUpdate"
 		| "indexCleared"
 		| "toggleWorkspaceIndexing"
+		| "setIndexWorkspacePath"
 		| "setAutoEnableDefault"
 		| "focusPanelRequest"
 		| "openExternal"
@@ -627,6 +628,8 @@ export interface WebviewMessage {
 	worktreeForce?: boolean
 	worktreeNewWindow?: boolean
 	worktreeIncludeContent?: string
+	// Index workspace path for codebase indexing
+	workspacePath?: string
 }
 
 export interface RequestOpenAiCodexRateLimitsMessage {
@@ -677,6 +680,7 @@ export interface IndexingStatus {
 	workspacePath?: string
 	workspaceEnabled?: boolean
 	autoEnableDefault?: boolean
+	indexWorkspacePath?: string
 }
 
 export interface IndexingStatusUpdateMessage {

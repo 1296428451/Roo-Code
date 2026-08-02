@@ -2514,6 +2514,26 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			}
 			break
 		}
+		case "setIndexWorkspacePath": {
+			try {
+				const manager = provider.getCurrentWorkspaceCodeIndexManager()
+				if (!manager) {
+					provider.log("Cannot set index workspace path: No workspace folder open")
+					return
+				}
+				const workspacePath = message.workspacePath
+				await manager.setIndexWorkspacePath(workspacePath)
+				provider.postMessageToWebview({
+					type: "indexingStatusUpdate",
+					values: manager.getCurrentStatus(),
+				})
+			} catch (error) {
+				provider.log(
+					`Error setting index workspace path: ${error instanceof Error ? error.message : String(error)}`,
+				)
+			}
+			break
+		}
 		case "clearIndexData": {
 			try {
 				const manager = provider.getCurrentWorkspaceCodeIndexManager()

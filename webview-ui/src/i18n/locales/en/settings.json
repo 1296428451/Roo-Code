@@ -270,7 +270,10 @@
 		"stoppingButton": "Stopping...",
 		"workspaceToggleLabel": "Enable indexing for this workspace",
 		"workspaceDisabledMessage": "Indexing is configured but not enabled for this workspace.",
-		"autoEnableDefaultLabel": "Auto-enable indexing for new workspaces"
+		"autoEnableDefaultLabel": "Auto-enable indexing for new workspaces",
+		"indexWorkspacePathLabel": "Index Workspace Path",
+		"indexWorkspacePathPlaceholder": "Enter custom workspace path for indexing",
+		"indexWorkspacePathDescription": "Set a custom directory path for the index database. Leave empty to use the default workspace path."
 	},
 	"autoApprove": {
 		"description": "Run these actions without asking for permission. Only enable for actions you fully trust and if you understand the security risks.",

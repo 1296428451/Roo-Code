@@ -197,6 +197,9 @@ export const CodeIndexPopover: React.FC<CodeIndexPopoverProps> = ({
 	const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
 	const [saveError, setSaveError] = useState<string | null>(null)
 
+	// Index workspace path input state
+	const [indexWorkspacePathInput, setIndexWorkspacePathInput] = useState<string>("")
+
 	// Form validation state
 	const [formErrors, setFormErrors] = useState<Record<string, string>>({})
 
@@ -309,7 +312,9 @@ export const CodeIndexPopover: React.FC<CodeIndexPopoverProps> = ({
 						processedItems: event.data.values.processedItems,
 						totalItems: event.data.values.totalItems,
 						currentItemUnit: event.data.values.currentItemUnit || "items",
+						indexWorkspacePath: event.data.values.indexWorkspacePath,
 					})
+					setIndexWorkspacePathInput(event.data.values.indexWorkspacePath || "")
 				}
 			} else if (event.data.type === "codeIndexSettingsSaved") {
 				if (event.data.success) {
@@ -560,6 +565,13 @@ export const CodeIndexPopover: React.FC<CodeIndexPopoverProps> = ({
 		vscode.postMessage({
 			type: "saveCodeIndexSettingsAtomic",
 			codeIndexSettings: settingsToSave,
+		})
+	}
+
+	const handleSaveIndexWorkspacePath = () => {
+		vscode.postMessage({
+			type: "setIndexWorkspacePath",
+			workspacePath: indexWorkspacePathInput || undefined,
 		})
 	}
 
@@ -1640,6 +1652,29 @@ export const CodeIndexPopover: React.FC<CodeIndexPopoverProps> = ({
 							<p className="text-xs text-vscode-descriptionForeground pb-2">
 								{t("settings:codeIndex.workspaceDisabledMessage")}
 							</p>
+						)}
+
+						{/* Index Workspace Path Setting */}
+						{currentSettings.codebaseIndexEnabled && indexingStatus.workspaceEnabled && (
+							<div className="pt-2 pb-2">
+								<label className="text-xs text-vscode-foreground block pb-1">
+									{t("settings:codeIndex.indexWorkspacePathLabel")}
+								</label>
+								<div className="flex gap-2">
+									<VSCodeTextField
+										value={indexWorkspacePathInput}
+										onChange={(e) => setIndexWorkspacePathInput((e.target as HTMLInputElement).value)}
+										placeholder={t("settings:codeIndex.indexWorkspacePathPlaceholder")}
+										className="flex-1 text-xs h-7"
+									/>
+									<VSCodeButton onClick={handleSaveIndexWorkspacePath} className="h-7">
+										{t("settings:common.save")}
+									</VSCodeButton>
+								</div>
+								<p className="text-xs text-vscode-descriptionForeground mt-1">
+									{t("settings:codeIndex.indexWorkspacePathDescription")}
+								</p>
+							</div>
 						)}
 
 						{/* Action Buttons */}
