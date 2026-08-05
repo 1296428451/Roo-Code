@@ -144,10 +144,38 @@ export class CustomModesManager {
 			} catch (vscodeError) {
 				console.warn(`[CustomModesManager] Could not read from VSCode globalState: ${vscodeError instanceof Error ? vscodeError.message : String(vscodeError)}`)
 			}
+
+			// 3. Load from custom_modes.yaml (highest priority - directly editable by users)
+			try {
+				const yamlPath = await this.getCustomModesFilePath()
+				if (await fileExistsAtPath(yamlPath)) {
+					const content = await fs.readFile(yamlPath, "utf-8")
+					const parsed = yaml.parse(content) as any
+					const yamlModes = parsed?.customModes || []
+					if (Array.isArray(yamlModes) && yamlModes.length > 0) {
+						const validYamlModes = yamlModes
+							.map((mode: any) => {
+								const result = modeConfigSchema.safeParse(mode)
+								return result.success ? { ...result.data, source: "global" as const } : null
+							})
+							.filter(Boolean) as ModeConfig[]
+
+						if (validYamlModes.length > 0) {
+							this.customModes = this.mergeCustomModes(this.customModes, validYamlModes)
+							console.log(`[CustomModesManager] loadCustomModes from custom_modes.yaml: merged ${validYamlModes.length} modes, total now: ${this.customModes.length}`)
+						}
+					}
+				}
+			} catch (yamlError) {
+				console.warn(`[CustomModesManager] Could not read from custom_modes.yaml: ${yamlError instanceof Error ? yamlError.message : String(yamlError)}`)
+			}
 		} catch (error) {
 			console.error("[CustomModesManager] Failed to load custom modes:", error)
 			this.customModes = []
 		}
+
+		// Sync loaded modes to context.globalState so getAllModesWithPrompts sees them
+		await this.updateCustomModesInGlobalState()
 	}
 
 	private async saveCustomModes(): Promise<void> {
@@ -156,6 +184,14 @@ export class CustomModesManager {
 
 		// Also save to VSCode globalState for backward compatibility and migration
 		await this.updateCustomModesInGlobalState()
+
+		// Also save to custom_modes.yaml file
+		try {
+			const yamlPath = await this.getCustomModesFilePath()
+			await fs.writeFile(yamlPath, yaml.stringify({ customModes: this.customModes }, { indent: 2, lineWidth: -1 }), "utf-8")
+		} catch (error) {
+			console.error(`[CustomModesManager] Failed to save to custom_modes.yaml: ${error instanceof Error ? error.message : String(error)}`)
+		}
 
 		console.log(`[CustomModesManager] saveCustomModes: saved ${this.customModes.length} custom modes`)
 		this.onUpdateEmitter.fire(this.customModes)

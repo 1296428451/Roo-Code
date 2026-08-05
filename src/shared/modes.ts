@@ -163,13 +163,19 @@ export async function getAllModesWithPrompts(context: vscode.ExtensionContext): 
 	const customModePrompts = (await context.globalState.get<CustomModePrompts>("customModePrompts")) || {}
 
 	const allModes = getAllModes(customModes)
-	return allModes.map((mode) => ({
-		...mode,
-		roleDefinition: customModePrompts[mode.slug]?.roleDefinition ?? mode.roleDefinition,
-		whenToUse: customModePrompts[mode.slug]?.whenToUse ?? mode.whenToUse,
-		customInstructions: customModePrompts[mode.slug]?.customInstructions ?? mode.customInstructions,
-		// description is not overridable via customModePrompts, so we keep the original
-	}))
+	return allModes.map((mode) => {
+		const isCustom = customModes.some((cm) => cm.slug === mode.slug)
+		if (isCustom) {
+			return mode
+		}
+		return {
+			...mode,
+			roleDefinition: customModePrompts[mode.slug]?.roleDefinition ?? mode.roleDefinition,
+			whenToUse: customModePrompts[mode.slug]?.whenToUse ?? mode.whenToUse,
+			customInstructions: customModePrompts[mode.slug]?.customInstructions ?? mode.customInstructions,
+			// description is not overridable via customModePrompts, so we keep the original
+		}
+	})
 }
 
 // Helper function to get complete mode details with all overrides
@@ -186,13 +192,22 @@ export async function getFullModeDetails(
 	// First get the base mode config from custom modes or built-in modes
 	const baseMode = getModeBySlug(modeSlug, customModes) || modes.find((m) => m.slug === modeSlug) || modes[0]
 
+	// Check if the mode is a custom mode from customModes
+	const isCustom = customModes?.some((cm) => cm.slug === modeSlug)
+
 	// Check for any prompt component overrides
 	const promptComponent = customModePrompts?.[modeSlug]
 
 	// Get the base custom instructions
-	const baseCustomInstructions = promptComponent?.customInstructions || baseMode.customInstructions || ""
-	const baseWhenToUse = promptComponent?.whenToUse || baseMode.whenToUse || ""
-	const baseDescription = promptComponent?.description || baseMode.description || ""
+	const baseCustomInstructions = isCustom
+		? (baseMode.customInstructions || "")
+		: (promptComponent?.customInstructions || baseMode.customInstructions || "")
+	const baseWhenToUse = isCustom
+		? (baseMode.whenToUse || "")
+		: (promptComponent?.whenToUse || baseMode.whenToUse || "")
+	const baseDescription = isCustom
+		? (baseMode.description || "")
+		: (promptComponent?.description || baseMode.description || "")
 
 	// If we have cwd, load and combine all custom instructions
 	let fullCustomInstructions = baseCustomInstructions
@@ -209,7 +224,9 @@ export async function getFullModeDetails(
 	// Return mode with any overrides applied
 	return {
 		...baseMode,
-		roleDefinition: promptComponent?.roleDefinition || baseMode.roleDefinition,
+		roleDefinition: isCustom
+			? (baseMode.roleDefinition || "")
+			: (promptComponent?.roleDefinition || baseMode.roleDefinition),
 		whenToUse: baseWhenToUse,
 		description: baseDescription,
 		customInstructions: fullCustomInstructions,

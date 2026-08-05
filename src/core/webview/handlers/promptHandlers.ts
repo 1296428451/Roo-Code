@@ -1,6 +1,6 @@
 import * as vscode from "vscode"
 import { ClineProvider } from "../ClineProvider"
-import { MessageEnhancer } from "../messageEnhancer"
+import { MessageEnhancer, type MessageEnhancerOptions } from "../messageEnhancer"
 import { generateSystemPrompt } from "../generateSystemPrompt"
 import { t } from "../../../i18n"
 
@@ -13,14 +13,42 @@ export interface HandlerContext {
 }
 
 export const handlePromptOperations = async (ctx: HandlerContext, message: any): Promise<void> => {
-	const { provider } = ctx
+	const { provider, getGlobalState, updateGlobalState } = ctx
 
 	switch (message.type) {
+		case "updatePrompt": {
+			try {
+				const existingPrompts =
+					(getGlobalState("customModePrompts") as Record<string, any>) || {}
+				const promptMode = message.promptMode
+				const customPrompt = message.customPrompt
+
+				existingPrompts[promptMode] = customPrompt
+				await updateGlobalState("customModePrompts", existingPrompts)
+				await provider.context.globalState.update("customModePrompts", existingPrompts)
+				await provider.postStateToWebview()
+			} catch (error) {
+				provider.log(`Error updating prompt: ${error}`)
+			}
+			break
+		}
+
 		case "enhancePrompt": {
 			try {
-				const messageEnhancer = new MessageEnhancer(provider)
-				const enhancedText = await messageEnhancer.enhancePrompt(message.text || "", message.images || [])
-				await provider.postMessageToWebview({ type: "enhancedPrompt", text: enhancedText })
+				const state = await provider.getState()
+				const currentTask = provider.getCurrentTask()
+				const options: MessageEnhancerOptions = {
+					text: message.text || "",
+					apiConfiguration: state.apiConfiguration,
+					customSupportPrompts: state.customSupportPrompts,
+					listApiConfigMeta: state.listApiConfigMeta ?? [],
+					enhancementApiConfigId: state.enhancementApiConfigId,
+					includeTaskHistoryInEnhance: state.includeTaskHistoryInEnhance,
+					currentClineMessages: currentTask?.clineMessages,
+					providerSettingsManager: provider.providerSettingsManager,
+				}
+				const result = await MessageEnhancer.enhanceMessage(options)
+				await provider.postMessageToWebview({ type: "enhancedPrompt", text: result.enhancedText })
 			} catch (error) {
 				provider.log(`Error enhancing prompt: ${error}`)
 				vscode.window.showErrorMessage(t("common:errors.enhance_prompt"))

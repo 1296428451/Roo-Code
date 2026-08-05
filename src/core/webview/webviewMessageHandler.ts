@@ -434,6 +434,7 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			await handleMiscOperations(ctx, message)
 			break
 
+		case "updatePrompt":
 		case "enhancePrompt":
 		case "getSystemPrompt":
 		case "copySystemPrompt":
