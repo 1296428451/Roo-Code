@@ -193,6 +193,7 @@ export const globalSettingsSchema = z.object({
 	language: languagesSchema.optional(),
 
 	mcpEnabled: z.boolean().optional(),
+	mcpServers: z.record(z.string(), z.any()).optional(),
 
 	mode: z.string().optional(),
 	modeApiConfigs: z.record(z.string(), z.string()).optional(),

@@ -21,6 +21,7 @@ import {
 
 import { logger } from "../../utils/logging"
 import { supportPrompt } from "../../shared/support-prompt"
+import { getSettingsStore } from "../../services/SettingsStore"
 
 type GlobalStateKey = keyof GlobalState
 type SecretStateKey = keyof SecretState
@@ -38,101 +39,81 @@ const globalSettingsExportSchema = globalSettingsSchema.omit({
 
 export class ContextProxy {
 	private readonly originalContext: vscode.ExtensionContext
-
-	private stateCache: GlobalState
-	private secretCache: SecretState
 	private _isInitialized = false
+	private logFn: ((message: string) => void) | null = null
 
 	constructor(context: vscode.ExtensionContext) {
 		this.originalContext = context
-		this.stateCache = {}
-		this.secretCache = {}
 		this._isInitialized = false
+	}
+
+	setLogger(logFn: ((message: string) => void) | null): void {
+		this.logFn = logFn
+	}
+
+	private log(message: string): void {
+		if (this.logFn) {
+			this.logFn(message)
+		}
+		console.log(message)
 	}
 
 	public get isInitialized() {
 		return this._isInitialized
 	}
 
+	private get store() {
+		return getSettingsStore()
+	}
+
 	public async initialize() {
-		for (const key of GLOBAL_STATE_KEYS) {
+		await this.store.loadAll()
+
+		// Sync pass-through keys from SettingsStore -> VS Code globalState so that
+		// the getGlobalState() pass-through still works for data stored in the file.
+		for (const key of PASS_THROUGH_STATE_KEYS) {
 			try {
-				// Revert to original assignment
-				this.stateCache[key] = this.originalContext.globalState.get(key)
-			} catch (error) {
-				logger.error(`Error loading global ${key}: ${error instanceof Error ? error.message : String(error)}`)
+				const fromFile = (this.store.getGlobalState as any)(key)
+				if (fromFile !== undefined) {
+					const fromVsCode = this.originalContext.globalState.get(key)
+					const fileStr = JSON.stringify(fromFile)
+					const vsStr = JSON.stringify(fromVsCode)
+					if (vsStr !== fileStr) {
+						logger.info(`[ContextProxy] Syncing SettingsStore.${key} (len=${fileStr.length}) to VS Code globalState (vsCodeLen=${vsStr?.length || 0})`)
+						await this.originalContext.globalState.update(key, fromFile)
+					}
+				}
+			} catch (err) {
+				logger.error(`[ContextProxy] Failed to sync pass-through key ${key} from SettingsStore to globalState: ${err}`)
 			}
 		}
 
-		const promises = [
-			...SECRET_STATE_KEYS.map(async (key) => {
-				try {
-					this.secretCache[key] = await this.originalContext.secrets.get(key)
-				} catch (error) {
-					logger.error(
-						`Error loading secret ${key}: ${error instanceof Error ? error.message : String(error)}`,
-					)
-				}
-			}),
-			...GLOBAL_SECRET_KEYS.map(async (key) => {
-				try {
-					this.secretCache[key] = await this.originalContext.secrets.get(key)
-				} catch (error) {
-					logger.error(
-						`Error loading global secret ${key}: ${error instanceof Error ? error.message : String(error)}`,
-					)
-				}
-			}),
-		]
-
-		await Promise.all(promises)
-
-		// Migration: Check for old nested image generation settings and migrate them
 		await this.migrateImageGenerationSettings()
-
-		// Migration: Sanitize invalid/removed API providers
 		await this.migrateInvalidApiProvider()
-
-		// Migration: Move legacy customCondensingPrompt to customSupportPrompts
 		await this.migrateLegacyCondensingPrompt()
-
-		// Migration: Clear old default condensing prompt so users get the improved v2 default
 		await this.migrateOldDefaultCondensingPrompt()
+
+		await this.store.persistAll()
 
 		this._isInitialized = true
 	}
 
-	/**
-	 * Migrates the legacy customCondensingPrompt to the new customSupportPrompts structure
-	 * and removes the legacy field.
-	 *
-	 * Note: Only true customizations are migrated. If the legacy prompt equals the default,
-	 * we skip the migration to avoid pinning users to an old default if the default changes.
-	 */
 	private async migrateLegacyCondensingPrompt() {
 		try {
-			const legacyPrompt = this.originalContext.globalState.get<string>("customCondensingPrompt")
+			const legacyPrompt = this.store.getGlobalState("customCondensingPrompt")
 			if (legacyPrompt) {
-				const currentSupportPrompts =
-					this.originalContext.globalState.get<Record<string, string>>("customSupportPrompts") || {}
+				const currentSupportPrompts = this.store.getGlobalState("customSupportPrompts") || {}
 
-				// Only migrate if:
-				// 1. The new location doesn't already have a value
-				// 2. The legacy prompt is a true customization (not equal to the default)
-				// This prevents pinning users to an old default if the default prompt changes.
 				const isCustomized = legacyPrompt.trim() !== supportPrompt.default.CONDENSE.trim()
 				if (!currentSupportPrompts.CONDENSE && isCustomized) {
 					logger.info("Migrating customized legacy customCondensingPrompt to customSupportPrompts")
 					const updatedPrompts = { ...currentSupportPrompts, CONDENSE: legacyPrompt }
-					await this.originalContext.globalState.update("customSupportPrompts", updatedPrompts)
-					this.stateCache.customSupportPrompts = updatedPrompts
+					this.store.setGlobalState("customSupportPrompts", updatedPrompts)
 				} else if (!isCustomized) {
 					logger.info("Skipping migration: legacy customCondensingPrompt equals the default prompt")
 				}
 
-				// Always remove the legacy field
-				await this.originalContext.globalState.update("customCondensingPrompt", undefined)
-				this.stateCache.customCondensingPrompt = undefined
+				this.store.setGlobalState("customCondensingPrompt", undefined)
 			}
 		} catch (error) {
 			logger.error(
@@ -141,22 +122,9 @@ export class ContextProxy {
 		}
 	}
 
-	/**
-	 * Clears the old v1 default condensing prompt from customSupportPrompts.CONDENSE if present.
-	 *
-	 * Before PR #10873 "Intelligent Context Condensation v2", the default condensing prompt was
-	 * a simpler 6-section format. Users who had this old default saved in their settings would
-	 * be stuck with it instead of getting the improved v2 default (which includes analysis tags,
-	 * error tracking, all user messages, and better task continuity).
-	 *
-	 * This migration uses fingerprinting to detect the old v1 default - checking for key
-	 * identifying phrases unique to v1 and absence of v2-specific features. This is more
-	 * lenient than exact matching and handles whitespace variations.
-	 */
 	private async migrateOldDefaultCondensingPrompt() {
 		try {
-			const currentSupportPrompts =
-				this.originalContext.globalState.get<Record<string, string>>("customSupportPrompts") || {}
+			const currentSupportPrompts = this.store.getGlobalState("customSupportPrompts") || {}
 
 			const savedCondensePrompt = currentSupportPrompts.CONDENSE
 
@@ -165,12 +133,10 @@ export class ContextProxy {
 					"Clearing old v1 default condensing prompt from customSupportPrompts.CONDENSE - user will now get the improved v2 default",
 				)
 
-				// Remove the CONDENSE key from customSupportPrompts
 				const { CONDENSE: _, ...remainingPrompts } = currentSupportPrompts
 				const updatedPrompts = Object.keys(remainingPrompts).length > 0 ? remainingPrompts : undefined
 
-				await this.originalContext.globalState.update("customSupportPrompts", updatedPrompts)
-				this.stateCache.customSupportPrompts = updatedPrompts
+				this.store.setGlobalState("customSupportPrompts", updatedPrompts)
 			}
 		} catch (error) {
 			logger.error(
@@ -179,18 +145,7 @@ export class ContextProxy {
 		}
 	}
 
-	/**
-	 * Detects if a prompt is the old v1 default condensing prompt using fingerprinting.
-	 * This is more lenient than exact matching - it checks for key identifying phrases
-	 * unique to v1 and absence of v2-specific features.
-	 *
-	 * V1 characteristics:
-	 * - Exactly 6 numbered sections (1-6)
-	 * - Contains specific section headers like "Previous Conversation", "Current Work", etc.
-	 * - Does NOT contain v2-specific features like "<analysis>", "SYSTEM OPERATION", etc.
-	 */
 	private isOldV1DefaultCondensePrompt(prompt: string): boolean {
-		// Key phrases unique to the v1 default (must ALL be present)
 		const v1RequiredPhrases = [
 			"Your task is to create a detailed summary of the conversation so far",
 			"1. Previous Conversation:",
@@ -202,41 +157,31 @@ export class ContextProxy {
 			"Output only the summary of the conversation so far",
 		]
 
-		// V2-specific features (if ANY are present, this is NOT v1 default)
 		const v2Features = [
 			"<analysis>",
 			"SYSTEM OPERATION",
 			"Errors and fixes",
 			"All user messages",
-			"7.", // v2 has more than 6 sections
+			"7.",
 			"8.",
 			"9.",
 		]
 
-		// Check that all v1 required phrases are present
 		const hasAllV1Phrases = v1RequiredPhrases.every((phrase) => prompt.toLowerCase().includes(phrase.toLowerCase()))
-
-		// Check that no v2 features are present
 		const hasNoV2Features = v2Features.every((feature) => !prompt.toLowerCase().includes(feature.toLowerCase()))
 
 		return hasAllV1Phrases && hasNoV2Features
 	}
 
-	/**
-	 * Migrates unknown apiProvider values by clearing them from storage.
-	 * Retired providers are preserved so users can keep historical configuration.
-	 */
 	private async migrateInvalidApiProvider() {
 		try {
-			const apiProvider = this.stateCache.apiProvider
+			const apiProvider = this.store.getGlobalState("apiProvider")
 			const isKnownProvider =
 				typeof apiProvider === "string" && (isProviderName(apiProvider) || isRetiredProvider(apiProvider))
 
 			if (apiProvider !== undefined && !isKnownProvider) {
 				logger.info(`[ContextProxy] Found invalid provider "${apiProvider}" in storage - clearing it`)
-				// Clear the invalid provider from both cache and storage
-				this.stateCache.apiProvider = undefined
-				await this.originalContext.globalState.update("apiProvider", undefined)
+				this.store.setGlobalState("apiProvider", undefined)
 			}
 		} catch (error) {
 			logger.error(
@@ -245,39 +190,26 @@ export class ContextProxy {
 		}
 	}
 
-	/**
-	 * Migrates old nested openRouterImageGenerationSettings to the new flattened structure
-	 */
 	private async migrateImageGenerationSettings() {
 		try {
-			// Check if there's an old nested structure
-			const oldNestedSettings = this.originalContext.globalState.get<any>("openRouterImageGenerationSettings")
+			const oldNestedSettings = this.store.getGlobalState("openRouterImageGenerationSettings" as any) as any
 
 			if (oldNestedSettings && typeof oldNestedSettings === "object") {
 				logger.info("Migrating old nested image generation settings to flattened structure")
 
-				// Migrate the API key if it exists and we don't already have one
-				if (oldNestedSettings.openRouterApiKey && !this.secretCache.openRouterImageApiKey) {
-					await this.originalContext.secrets.store(
-						"openRouterImageApiKey",
-						oldNestedSettings.openRouterApiKey,
-					)
-					this.secretCache.openRouterImageApiKey = oldNestedSettings.openRouterApiKey
+				const currentImageApiKey = this.store.getSecret("openRouterImageApiKey")
+				if (oldNestedSettings.openRouterApiKey && !currentImageApiKey) {
+					this.store.setSecret("openRouterImageApiKey", oldNestedSettings.openRouterApiKey)
 					logger.info("Migrated openRouterImageApiKey to secrets")
 				}
 
-				// Migrate the selected model if it exists and we don't already have one
-				if (oldNestedSettings.selectedModel && !this.stateCache.openRouterImageGenerationSelectedModel) {
-					await this.originalContext.globalState.update(
-						"openRouterImageGenerationSelectedModel",
-						oldNestedSettings.selectedModel,
-					)
-					this.stateCache.openRouterImageGenerationSelectedModel = oldNestedSettings.selectedModel
+				const currentSelectedModel = this.store.getGlobalState("openRouterImageGenerationSelectedModel")
+				if (oldNestedSettings.selectedModel && !currentSelectedModel) {
+					this.store.setGlobalState("openRouterImageGenerationSelectedModel", oldNestedSettings.selectedModel)
 					logger.info("Migrated openRouterImageGenerationSelectedModel to global state")
 				}
 
-				// Clean up the old nested structure
-				await this.originalContext.globalState.update("openRouterImageGenerationSettings", undefined)
+				this.store.setGlobalState("openRouterImageGenerationSettings" as any, undefined)
 				logger.info("Removed old nested openRouterImageGenerationSettings")
 			}
 		} catch (error) {
@@ -311,11 +243,6 @@ export class ContextProxy {
 		return this.originalContext.extensionMode
 	}
 
-	/**
-	 * ExtensionContext.globalState
-	 * https://code.visualstudio.com/api/references/vscode-api#ExtensionContext.globalState
-	 */
-
 	getGlobalState<K extends GlobalStateKey>(key: K): GlobalState[K]
 	getGlobalState<K extends GlobalStateKey>(key: K, defaultValue: GlobalState[K]): GlobalState[K]
 	getGlobalState<K extends GlobalStateKey>(key: K, defaultValue?: GlobalState[K]): GlobalState[K] {
@@ -324,68 +251,34 @@ export class ContextProxy {
 			return value === undefined || value === null ? defaultValue : value
 		}
 
-		const value = this.stateCache[key]
+		const value = this.store.getGlobalState(key)
 		return value !== undefined ? value : defaultValue
 	}
 
-	updateGlobalState<K extends GlobalStateKey>(key: K, value: GlobalState[K]) {
+	async updateGlobalState<K extends GlobalStateKey>(key: K, value: GlobalState[K]) {
 		if (isPassThroughStateKey(key)) {
 			return this.originalContext.globalState.update(key, value)
 		}
 
-		this.stateCache[key] = value
-		return this.originalContext.globalState.update(key, value)
+		this.store.setGlobalState(key, value)
+		await this.store.persistGlobalSettings()
 	}
 
 	private getAllGlobalState(): GlobalState {
 		return Object.fromEntries(GLOBAL_STATE_KEYS.map((key) => [key, this.getGlobalState(key)]))
 	}
 
-	/**
-	 * ExtensionContext.secrets
-	 * https://code.visualstudio.com/api/references/vscode-api#ExtensionContext.secrets
-	 */
-
 	getSecret(key: SecretStateKey) {
-		return this.secretCache[key]
+		return this.store.getSecret(key)
 	}
 
-	storeSecret(key: SecretStateKey, value?: string) {
-		// Update cache.
-		this.secretCache[key] = value
-
-		// Write directly to context.
-		return value === undefined
-			? this.originalContext.secrets.delete(key)
-			: this.originalContext.secrets.store(key, value)
+	async storeSecret(key: SecretStateKey, value?: string) {
+		this.store.setSecret(key, value)
+		await this.store.persistSecrets()
 	}
 
-	/**
-	 * Refresh secrets from storage and update cache
-	 * This is useful when you need to ensure the cache has the latest values
-	 */
 	async refreshSecrets(): Promise<void> {
-		const promises = [
-			...SECRET_STATE_KEYS.map(async (key) => {
-				try {
-					this.secretCache[key] = await this.originalContext.secrets.get(key)
-				} catch (error) {
-					logger.error(
-						`Error refreshing secret ${key}: ${error instanceof Error ? error.message : String(error)}`,
-					)
-				}
-			}),
-			...GLOBAL_SECRET_KEYS.map(async (key) => {
-				try {
-					this.secretCache[key] = await this.originalContext.secrets.get(key)
-				} catch (error) {
-					logger.error(
-						`Error refreshing global secret ${key}: ${error instanceof Error ? error.message : String(error)}`,
-					)
-				}
-			}),
-		]
-		await Promise.all(promises)
+		await this.store.loadAll()
 	}
 
 	private getAllSecretState(): SecretState {
@@ -394,10 +287,6 @@ export class ContextProxy {
 			...GLOBAL_SECRET_KEYS.map((key) => [key, this.getSecret(key as SecretStateKey)]),
 		])
 	}
-
-	/**
-	 * GlobalSettings
-	 */
 
 	public getGlobalSettings(): GlobalSettings {
 		const values = this.getValues()
@@ -409,17 +298,9 @@ export class ContextProxy {
 		}
 	}
 
-	/**
-	 * ProviderSettings
-	 */
-
 	public getProviderSettings(): ProviderSettings {
 		const values = this.getValues()
 
-		// Sanitize invalid/removed apiProvider values before parsing
-		// This handles cases where a user had a provider selected that was later removed
-		// from the extension (e.g., "glama"). We sanitize here to avoid repeated
-		// schema validation errors that can cause infinite update loops.
 		const sanitizedValues = this.sanitizeProviderValues(values)
 
 		try {
@@ -432,13 +313,7 @@ export class ContextProxy {
 		}
 	}
 
-	/**
-	 * Sanitizes provider values by resetting unknown apiProvider values.
-	 * Active and retired providers are preserved.
-	 */
 	private sanitizeProviderValues(values: RooCodeSettings): RooCodeSettings {
-		// Remove legacy Claude Code CLI wrapper keys that may still exist in global state.
-		// These keys were used by a removed local CLI runner and are no longer part of ProviderSettings.
 		const legacyKeys = ["claudeCodePath", "claudeCodeMaxOutputTokens"] as const
 
 		let sanitizedValues = values
@@ -456,7 +331,6 @@ export class ContextProxy {
 
 		if (values.apiProvider !== undefined && !isKnownProvider) {
 			logger.info(`[ContextProxy] Sanitizing invalid provider "${values.apiProvider}" - resetting to undefined`)
-			// Return a new values object without the invalid apiProvider
 			const { apiProvider, ...restValues } = sanitizedValues
 			return restValues as RooCodeSettings
 		}
@@ -464,37 +338,30 @@ export class ContextProxy {
 	}
 
 	public async setProviderSettings(values: ProviderSettings) {
-		// Explicitly clear out any old API configuration values before that
-		// might not be present in the new configuration.
-		// If a value is not present in the new configuration, then it is assumed
-		// that the setting's value should be `undefined` and therefore we
-		// need to remove it from the state cache if it exists.
-
-		// Ensure openAiHeaders is always an object even when empty
-		// This is critical for proper serialization/deserialization through IPC
 		if (values.openAiHeaders !== undefined) {
-			// Check if it's empty or null
 			if (!values.openAiHeaders || Object.keys(values.openAiHeaders).length === 0) {
 				values.openAiHeaders = {}
 			}
 		}
 
+		const currentState = this.store.getAllGlobalState()
+		const clearedState = PROVIDER_SETTINGS_KEYS
+			.filter((key) => !isSecretStateKey(key))
+			.filter((key) => !!currentState[key])
+			.reduce((acc, key) => ({ ...acc, [key]: undefined }), {} as ProviderSettings)
+
 		await this.setValues({
-			...PROVIDER_SETTINGS_KEYS.filter((key) => !isSecretStateKey(key))
-				.filter((key) => !!this.stateCache[key])
-				.reduce((acc, key) => ({ ...acc, [key]: undefined }), {} as ProviderSettings),
+			...clearedState,
 			...values,
 		})
 	}
 
-	/**
-	 * RooCodeSettings
-	 */
-
 	public async setValue<K extends RooCodeSettingsKey>(key: K, value: RooCodeSettings[K]) {
-		return isSecretStateKey(key)
-			? this.storeSecret(key as SecretStateKey, value as string)
-			: this.updateGlobalState(key as GlobalStateKey, value)
+		if (isSecretStateKey(key)) {
+			await this.storeSecret(key as SecretStateKey, value as string)
+		} else {
+			await this.updateGlobalState(key as GlobalStateKey, value)
+		}
 	}
 
 	public getValue<K extends RooCodeSettingsKey>(key: K): RooCodeSettings[K] {
@@ -506,9 +373,19 @@ export class ContextProxy {
 	public getValues(): RooCodeSettings {
 		const globalState = this.getAllGlobalState()
 		const secretState = this.getAllSecretState()
-
-		// Simply merge all states - no nested secrets to handle
 		return { ...globalState, ...secretState }
+	}
+
+	public async dumpConfig(): Promise<void> {
+		const globalState = this.getAllGlobalState()
+		const mcpServers = globalState.mcpServers
+		const mcpServersType = typeof mcpServers
+		const mcpServersKeys = mcpServers && typeof mcpServers === "object" && !Array.isArray(mcpServers)
+			? Object.keys(mcpServers)
+			: []
+
+		this.log("[GlobalConfiguration] loading complete")
+		this.log(`  mcpServers type: ${mcpServersType}, keys: [${mcpServersKeys.join(", ")}], count: ${mcpServersKeys.length}`)
 	}
 
 	public async setValues(values: RooCodeSettings) {
@@ -516,15 +393,10 @@ export class ContextProxy {
 		await Promise.all(entries.map(([key, value]) => this.setValue(key, value)))
 	}
 
-	/**
-	 * Import / Export
-	 */
-
 	public async export(): Promise<GlobalSettings | undefined> {
 		try {
 			const globalSettings = globalSettingsExportSchema.parse(this.getValues())
 
-			// Exports should only contain global settings, so this skips project custom modes (those exist in the .roomode folder)
 			globalSettings.customModes = globalSettings.customModes?.filter((mode) => mode.source === "global")
 
 			return Object.fromEntries(Object.entries(globalSettings).filter(([_, value]) => value !== undefined))
@@ -533,22 +405,8 @@ export class ContextProxy {
 		}
 	}
 
-	/**
-	 * Resets all global state, secrets, and in-memory caches.
-	 * This clears all data from both the in-memory caches and the VSCode storage.
-	 * @returns A promise that resolves when all reset operations are complete
-	 */
 	public async resetAllState() {
-		// Clear in-memory caches
-		this.stateCache = {}
-		this.secretCache = {}
-
-		await Promise.all([
-			...GLOBAL_STATE_KEYS.map((key) => this.originalContext.globalState.update(key, undefined)),
-			...SECRET_STATE_KEYS.map((key) => this.originalContext.secrets.delete(key)),
-			...GLOBAL_SECRET_KEYS.map((key) => this.originalContext.secrets.delete(key)),
-		])
-
+		await this.store.resetAll()
 		await this.initialize()
 	}
 

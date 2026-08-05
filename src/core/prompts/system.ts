@@ -21,6 +21,7 @@ import {
 	getModesSection,
 	addCustomInstructions,
 	markdownFormattingSection,
+	getSkillsSection,
 } from "./sections"
 
 // Helper function to get prompt component, filtering out empty objects
@@ -52,6 +53,7 @@ async function generatePrompt(
 	settings?: SystemPromptSettings,
 	todoList?: TodoItem[],
 	modelId?: string,
+	skillsManager?: import("../../services/skills/SkillsManager").SkillsManager,
 ): Promise<string> {
 	if (!context) {
 		throw new Error("Extension context is required for generating system prompt")
@@ -70,6 +72,8 @@ async function generatePrompt(
 	// Tools catalog is not included in the system prompt.
 	const toolsCatalog = ""
 
+	const skillsSection = await getSkillsSection(skillsManager, mode)
+
 	const basePrompt = `${roleDefinition}
 
 ${markdownFormattingSection()}
@@ -81,6 +85,7 @@ ${getSharedToolUseSection()}${toolsCatalog}
 ${getCapabilitiesSection()}
 
 ${modesSection}
+${skillsSection}
 ${getRulesSection(settings)}
 
 ${getSystemInfoSection(cwd)}
@@ -112,6 +117,7 @@ export const SYSTEM_PROMPT = async (
 	settings?: SystemPromptSettings,
 	todoList?: TodoItem[],
 	modelId?: string,
+	skillsManager?: import("../../services/skills/SkillsManager").SkillsManager,
 ): Promise<string> => {
 	if (!context) {
 		throw new Error("Extension context is required for generating system prompt")
@@ -139,5 +145,6 @@ export const SYSTEM_PROMPT = async (
 		settings,
 		todoList,
 		modelId,
+		skillsManager,
 	)
 }

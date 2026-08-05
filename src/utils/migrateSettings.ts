@@ -43,15 +43,25 @@ export async function migrateSettings(
 
 				// Only migrate if old file exists and new file doesn't exist yet
 				// This ensures we don't overwrite any existing new files
-				const oldFileExists = await fileExistsAtPath(oldPath)
 				const newFileExists = await fileExistsAtPath(newPath)
 
-				if (oldFileExists && !newFileExists) {
+				// If new file already exists, skip migration without checking old file
+				if (newFileExists) {
+					outputChannel.appendLine(
+						`Skipping migration of ${migration.oldName} to ${migration.newName}: new file already exists`,
+					)
+					continue
+				}
+
+				// Only check old file existence if new file doesn't exist
+				const oldFileExists = await fileExistsAtPath(oldPath)
+
+				if (oldFileExists) {
 					await fs.rename(oldPath, newPath)
 					outputChannel.appendLine(`Renamed ${migration.oldName} to ${migration.newName}`)
 				} else {
 					outputChannel.appendLine(
-						`Skipping migration of ${migration.oldName} to ${migration.newName}: ${oldFileExists ? "new file already exists" : "old file not found"}`,
+						`Skipping migration of ${migration.oldName} to ${migration.newName}: old file not found`,
 					)
 				}
 			}
@@ -73,17 +83,19 @@ async function migrateCustomModesToYaml(settingsDir: string, outputChannel: vsco
 	const oldJsonPath = path.join(settingsDir, deprecatedCustomModesJSONFilename)
 	const newYamlPath = path.join(settingsDir, GlobalFileNames.customModes)
 
-	// Only proceed if JSON exists and YAML doesn't
-	const jsonExists = await fileExistsAtPath(oldJsonPath)
+	// Check if YAML already exists first - if so, no need to check JSON
 	const yamlExists = await fileExistsAtPath(newYamlPath)
 
-	if (!jsonExists) {
-		outputChannel.appendLine("No custom_modes.json found, skipping YAML migration")
+	if (yamlExists) {
+		outputChannel.appendLine("custom_modes.yaml already exists, skipping YAML migration")
 		return
 	}
 
-	if (yamlExists) {
-		outputChannel.appendLine("custom_modes.yaml already exists, skipping migration")
+	// Only proceed if JSON exists and YAML doesn't
+	const jsonExists = await fileExistsAtPath(oldJsonPath)
+
+	if (!jsonExists) {
+		outputChannel.appendLine("No custom_modes.json found, skipping YAML migration")
 		return
 	}
 
@@ -96,7 +108,7 @@ async function migrateCustomModesToYaml(settingsDir: string, outputChannel: vsco
 			const customModesData = yaml.parse(jsonContent)
 
 			// Convert to YAML with no line width limit to prevent line breaks
-			const yamlContent = yaml.stringify(customModesData, { lineWidth: 0 })
+			const yamlContent = yaml.stringify(customModesData, { lineWidth: -1 })
 
 			// Write YAML file
 			await fs.writeFile(newYamlPath, yamlContent, "utf-8")

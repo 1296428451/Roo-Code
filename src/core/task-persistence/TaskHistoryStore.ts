@@ -82,19 +82,26 @@ export class TaskHistoryStore {
 			const tasksDir = await this.getTasksDir()
 			await fs.mkdir(tasksDir, { recursive: true })
 
+			console.log(`[TaskHistoryStore] initialize() starting, tasksDir: ${tasksDir}`)
+
 			// 1. Load existing index into the cache
 			await this.loadIndex()
+			console.log(`[TaskHistoryStore] After loadIndex(): ${this.cache.size} items in cache`)
 
 			// 2. Reconcile cache against actual task directories on disk
 			await this.reconcile()
+			console.log(`[TaskHistoryStore] After reconcile(): ${this.cache.size} items in cache`)
 
 			// 3. Start fs.watch for cross-instance reactivity
 			this.startWatcher()
 
 			// 4. Start periodic reconciliation as a defensive fallback
 			this.startPeriodicReconciliation()
+		} catch (error) {
+			console.error(`[TaskHistoryStore] initialize() error: ${error instanceof Error ? error.message : String(error)}`)
 		} finally {
 			// Mark initialization as complete so callers awaiting `initialized` can proceed
+			console.log(`[TaskHistoryStore] initialize() complete, cache size: ${this.cache.size}`)
 			this.resolveInitialized()
 		}
 	}
@@ -327,20 +334,26 @@ export class TaskHistoryStore {
 			return
 		}
 
+		const tasksDir = await this.getTasksDir()
+
 		for (const item of taskHistoryEntries) {
 			if (!item.id) {
 				continue
 			}
 
-			// Check if task directory exists on disk
-			const tasksDir = await this.getTasksDir()
 			const taskDir = path.join(tasksDir, item.id)
 
+			// Ensure task directory exists (create if needed for valid history entries)
 			try {
 				await fs.access(taskDir)
 			} catch {
-				// Task directory doesn't exist; skip this entry as it's orphaned in globalState
-				continue
+				// Task directory doesn't exist but we have a valid history item - create the directory
+				try {
+					await fs.mkdir(taskDir, { recursive: true })
+				} catch (mkdirError) {
+					console.error(`[TaskHistoryStore] Failed to create task dir for migration ${item.id}:`, mkdirError)
+					continue
+				}
 			}
 
 			// Write history_item.json if it doesn't exist yet

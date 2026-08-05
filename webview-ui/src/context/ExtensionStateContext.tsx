@@ -176,6 +176,10 @@ export const mergeExtensionState = (prevState: ExtensionState, newState: Partial
 	}
 }
 
+export const shouldShowWelcome = (state: Partial<ExtensionState>) => {
+	return !state.settingsImportedAt && !checkExistKey(state.apiConfiguration)
+}
+
 export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 	const [state, setState] = useState<ExtensionState>({
 		apiConfiguration: {},
@@ -283,9 +287,18 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 			switch (message.type) {
 				case "state": {
 					const newState = message.state ?? {}
-					setState((prevState) => mergeExtensionState(prevState, newState))
-					setShowWelcome(!checkExistKey(newState.apiConfiguration))
+					setState((prevState) => {
+						const mergedState = mergeExtensionState(prevState, newState)
+						setShowWelcome(shouldShowWelcome(mergedState))
+						return mergedState
+					})
 					setDidHydrateState(true)
+					// Sync the separate mcpServers state with the main state so the
+					// contextValue spread (which uses the separate mcpServers) stays
+					// consistent with the merged state.
+					if ((newState as any).mcpServers !== undefined) {
+						setMcpServers((newState as any).mcpServers ?? [])
+					}
 					// Update alwaysAllowFollowupQuestions if present in state message
 					if ((newState as any).alwaysAllowFollowupQuestions !== undefined) {
 						setAlwaysAllowFollowupQuestions((newState as any).alwaysAllowFollowupQuestions)

@@ -70,6 +70,7 @@ import { getWorkspacePath } from "../../utils/path"
 import { OrganizationAllowListViolationError } from "../../utils/errors"
 
 import { setPanel } from "../../activate/registerCommands"
+import { getSettingsStore } from "../../services/SettingsStore"
 
 import { t } from "../../i18n"
 
@@ -83,12 +84,10 @@ import { Task } from "../task/Task"
 
 import { webviewMessageHandler } from "./webviewMessageHandler"
 import type { ClineMessage, TodoItem } from "@roo-code/types"
-import { readApiMessages, saveApiMessages, saveTaskMessages, TaskHistoryStore } from "../task-persistence"
-import { readTaskMessages } from "../task-persistence/taskMessages"
-import { getNonce } from "./getNonce"
-import { getUri } from "./getUri"
+import { TaskHistoryStore } from "../task-persistence"
+import { getHMRHtmlContent, getHtmlContent } from "./webviewHtml"
+import { delegateParentAndOpenChild, reopenParentFromDelegation } from "./delegation"
 import { REQUESTY_BASE_URL } from "../../shared/utils/requesty"
-import { validateAndFixToolResultIds } from "../task/validateToolResultIds"
 
 /**
  * https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
@@ -148,6 +147,7 @@ export class ClineProvider
 	private clineMessagesSeq = 0
 
 	public isViewLaunched = false
+	public mcpHubInitializationPromise: Promise<void>
 	public settingsImportedAt?: number
 	public readonly latestAnnouncementId = "may-2026-final-roo-code-release" // Final Roo Code release announcement.
 	public readonly providerSettingsManager: ProviderSettingsManager
@@ -161,6 +161,25 @@ export class ClineProvider
 	) {
 		super()
 		this.currentWorkspacePath = getWorkspacePath()
+
+		// Load settingsImportedAt from persistent storage
+		this.settingsImportedAt = context.globalState.get<number>("settingsImportedAt")
+
+		// If settingsImportedAt is not set, check if config file exists.
+		// If config file exists, user has already completed onboarding.
+		if (!this.settingsImportedAt) {
+			this.ensureSettingsImportedAtFromConfig()
+				.then(async (updated) => {
+					if (updated) {
+						// Hydrate provider profile from roo-code-config.json before posting state
+						await this.hydrateProviderProfileFromConfig()
+						void this.postStateToWebview()
+					}
+				})
+				.catch((error) => {
+					this.log(`Failed to check config file: ${error}`)
+				})
+		}
 
 		ClineProvider.activeInstances.add(this)
 
@@ -181,25 +200,23 @@ export class ClineProvider
 		this._workspaceTracker = new WorkspaceTracker(this)
 
 		this.providerSettingsManager = new ProviderSettingsManager(this.context)
+		this.providerSettingsManager.setLogger((message) => this.log(message))
 
 		this.customModesManager = new CustomModesManager(this.context, async () => {
 			await this.postStateToWebviewWithoutClineMessages()
 		})
 
-		// Initialize MCP Hub through the singleton manager
-		McpServerManager.getInstance(this.context, this)
-			.then((hub) => {
-				this.mcpHub = hub
-				this.mcpHub.registerClient()
-			})
-			.catch((error) => {
-				this.log(`Failed to initialize MCP Hub: ${error}`)
-			})
-
 		// Initialize Skills Manager for skill discovery
 		this.skillsManager = new SkillsManager(this)
 		this.skillsManager.initialize().catch((error) => {
 			this.log(`Failed to initialize Skills Manager: ${error}`)
+		})
+
+		// Initialize MCP Hub for global MCP server management
+		this.mcpHubInitializationPromise = McpServerManager.getInstance(this.context, this).then((hub) => {
+			this.mcpHub = hub
+		}).catch((error) => {
+			this.log(`Failed to initialize MCP Hub: ${error}`)
 		})
 
 		// Forward <most> task events to the provider.
@@ -290,32 +307,143 @@ export class ClineProvider
 	}
 
 	/**
-	 * Initialize the TaskHistoryStore and migrate from globalState if needed.
+	 * Check if config file exists and set settingsImportedAt if it does.
+	 * This ensures users don't see welcome page if they already have a config file.
+	 */
+	public async ensureSettingsImportedAtFromConfig(): Promise<boolean> {
+		if (this.settingsImportedAt) {
+			return false
+		}
+
+		try {
+			const settingsStore = getSettingsStore()
+			const configExists = await settingsStore.configFileExists()
+			if (configExists && !this.settingsImportedAt) {
+				this.settingsImportedAt = 1
+				await this.context.globalState.update("settingsImportedAt", this.settingsImportedAt)
+				this.log("[ensureSettingsImportedAtFromConfig] Config file exists, settingsImportedAt set")
+				return true
+			}
+		} catch (error) {
+			this.log(`[ensureSettingsImportedAtFromConfig] Error: ${error}`)
+		}
+
+		return false
+	}
+
+	/**
+		* Hydrates runtime provider state from the persisted global settings file.
+		*/
+	public async hydrateProviderProfileFromConfig(): Promise<boolean> {
+		try {
+			const providerProfiles = await getSettingsStore().loadProviderProfiles()
+
+			if (!providerProfiles) {
+				return false
+			}
+
+			const profileKeys = Object.keys(providerProfiles)
+
+			const profileName = providerProfiles?.currentApiConfigName as string | undefined
+
+			if (!profileName) {
+				return false
+			}
+
+			const ppAny = providerProfiles as any
+			const apiConfigs = ppAny.apiConfigs
+
+			const ppModeConfigs = ppAny.modeApiConfigs
+			let needSyncModeConfigs = false
+			if (ppModeConfigs && typeof ppModeConfigs === "object" && Object.keys(ppModeConfigs).length > 0) {
+				const currentGlobalStateModeConfigs = this.getGlobalState("modeApiConfigs")
+				const currentPpStr = JSON.stringify(ppModeConfigs)
+				const currentGsStr = JSON.stringify(currentGlobalStateModeConfigs || {})
+				if (currentPpStr !== currentGsStr) {
+					needSyncModeConfigs = true
+				}
+			}
+
+			const hasConfig = await this.providerSettingsManager.hasConfig(profileName)
+
+			if (!hasConfig) {
+				return false
+			}
+
+			await this.activateProviderProfile({ name: profileName }, { persistModeConfig: false, persistTaskHistory: false })
+
+			if (needSyncModeConfigs && ppModeConfigs) {
+				await this.contextProxy.setValue("modeApiConfigs", ppModeConfigs)
+			} else {
+				const allModeConfigs = await this.providerSettingsManager.getAllModeConfigs()
+				const gsModeConfigs = this.getGlobalState("modeApiConfigs")
+				if (JSON.stringify(allModeConfigs) !== JSON.stringify(gsModeConfigs || {})) {
+					await this.contextProxy.setValue("modeApiConfigs", allModeConfigs)
+				}
+			}
+
+			return true
+		} catch (error) {
+			return false
+		}
+	}
+
+	/**
+		* Initialize the TaskHistoryStore and migrate from globalState if needed.
 	 */
 	private async initializeTaskHistoryStore(): Promise<void> {
 		try {
 			await this.taskHistoryStore.initialize()
 
-			// Migration: backfill per-task files from globalState on first run
 			const migrationKey = "taskHistoryMigratedToFiles"
 			const alreadyMigrated = this.context.globalState.get<boolean>(migrationKey)
 
-			if (!alreadyMigrated) {
-				const legacyHistory = this.context.globalState.get<HistoryItem[]>("taskHistory") ?? []
+			let legacyHistory: HistoryItem[] = []
+			const fromVscode = this.context.globalState.get<HistoryItem[]>("taskHistory") ?? []
+			let fromSettingsStore: HistoryItem[] = []
 
-				if (legacyHistory.length > 0) {
-					this.log(`[initializeTaskHistoryStore] Migrating ${legacyHistory.length} entries from globalState`)
+			try {
+				const store = getSettingsStore()
+				const candidate = store.getGlobalState("taskHistory" as any)
+				if (Array.isArray(candidate) && candidate.length > 0) {
+					fromSettingsStore = candidate as HistoryItem[]
+				}
+			} catch {}
+
+			const mergedMap = new Map<string, HistoryItem>()
+			for (const item of [...fromVscode, ...fromSettingsStore]) {
+				if (item && item.id) {
+					if (!mergedMap.has(item.id)) {
+						mergedMap.set(item.id, item)
+					} else {
+						const existing = mergedMap.get(item.id)!
+						const newTs = (item as any).ts || 0
+						const oldTs = (existing as any).ts || 0
+						if (newTs > oldTs) {
+							mergedMap.set(item.id, item)
+						}
+					}
+				}
+			}
+			legacyHistory = Array.from(mergedMap.values())
+
+			const currentCount = this.taskHistoryStore.getAll().length
+			const needsMigration = !alreadyMigrated || (currentCount === 0 && legacyHistory.length > 0)
+
+			if (needsMigration && legacyHistory.length > 0) {
+				await this.taskHistoryStore.migrateFromGlobalState(legacyHistory)
+			} else if (alreadyMigrated) {
+				if (legacyHistory.length > 0 && currentCount === 0) {
 					await this.taskHistoryStore.migrateFromGlobalState(legacyHistory)
 				}
+			}
 
+			if (!alreadyMigrated) {
 				await this.context.globalState.update(migrationKey, true)
-				this.log("[initializeTaskHistoryStore] Migration complete")
 			}
 
 			this.taskHistoryStoreInitialized = true
-		} catch (error) {
-			this.log(`[initializeTaskHistoryStore] Error: ${error instanceof Error ? error.message : String(error)}`)
-		}
+		} catch {}
 	}
 
 	/**
@@ -1055,184 +1183,11 @@ export class ClineProvider
 	}
 
 	private async getHMRHtmlContent(webview: vscode.Webview): Promise<string> {
-		let localPort = "5173"
-
-		try {
-			const fs = require("fs")
-			const path = require("path")
-			const portFilePath = path.resolve(__dirname, "../../.vite-port")
-
-			if (fs.existsSync(portFilePath)) {
-				localPort = fs.readFileSync(portFilePath, "utf8").trim()
-				console.log(`[ClineProvider:Vite] Using Vite server port from ${portFilePath}: ${localPort}`)
-			} else {
-				console.log(
-					`[ClineProvider:Vite] Port file not found at ${portFilePath}, using default port: ${localPort}`,
-				)
-			}
-		} catch (err) {
-			console.error("[ClineProvider:Vite] Failed to read Vite port file:", err)
-		}
-
-		const localServerUrl = `localhost:${localPort}`
-
-		// Check if local dev server is running.
-		try {
-			await axios.get(`http://${localServerUrl}`)
-		} catch (error) {
-			vscode.window.showErrorMessage(t("common:errors.hmr_not_running"))
-			return this.getHtmlContent(webview)
-		}
-
-		const nonce = getNonce()
-
-		// Get the OpenRouter base URL from configuration
-		const { apiConfiguration } = await this.getState()
-		const openRouterBaseUrl = apiConfiguration.openRouterBaseUrl || "https://openrouter.ai"
-		// Extract the domain for CSP
-		const openRouterDomain = openRouterBaseUrl.match(/^(https?:\/\/[^\/]+)/)?.[1] || "https://openrouter.ai"
-
-		const stylesUri = getUri(webview, this.contextProxy.extensionUri, [
-			"webview-ui",
-			"build",
-			"assets",
-			"index.css",
-		])
-
-		const codiconsUri = getUri(webview, this.contextProxy.extensionUri, ["assets", "codicons", "codicon.css"])
-		const materialIconsUri = getUri(webview, this.contextProxy.extensionUri, [
-			"assets",
-			"vscode-material-icons",
-			"icons",
-		])
-		const imagesUri = getUri(webview, this.contextProxy.extensionUri, ["assets", "images"])
-		const audioUri = getUri(webview, this.contextProxy.extensionUri, ["webview-ui", "audio"])
-
-		const file = "src/index.tsx"
-		const scriptUri = `http://${localServerUrl}/${file}`
-
-		const reactRefresh = /*html*/ `
-			<script nonce="${nonce}" type="module">
-				import RefreshRuntime from "http://localhost:${localPort}/@react-refresh"
-				RefreshRuntime.injectIntoGlobalHook(window)
-				window.$RefreshReg$ = () => {}
-				window.$RefreshSig$ = () => (type) => type
-				window.__vite_plugin_react_preamble_installed__ = true
-			</script>
-		`
-
-		const csp = [
-			"default-src 'none'",
-			`font-src ${webview.cspSource} data:`,
-			`style-src ${webview.cspSource} 'unsafe-inline' https://* http://${localServerUrl} http://0.0.0.0:${localPort}`,
-			`img-src ${webview.cspSource} https://storage.googleapis.com https://img.clerk.com data:`,
-			`media-src ${webview.cspSource}`,
-			`script-src 'unsafe-eval' ${webview.cspSource} https://* http://${localServerUrl} http://0.0.0.0:${localPort} 'nonce-${nonce}'`,
-			`connect-src ${webview.cspSource} ${openRouterDomain} https://* ws://${localServerUrl} ws://0.0.0.0:${localPort} http://${localServerUrl} http://0.0.0.0:${localPort}`,
-		]
-
-		return /*html*/ `
-			<!DOCTYPE html>
-			<html lang="en">
-				<head>
-					<meta charset="utf-8">
-					<meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no">
-					<meta http-equiv="Content-Security-Policy" content="${csp.join("; ")}">
-					<link rel="stylesheet" type="text/css" href="${stylesUri}">
-					<link href="${codiconsUri}" rel="stylesheet" />
-					<script nonce="${nonce}">
-						window.IMAGES_BASE_URI = "${imagesUri}"
-						window.AUDIO_BASE_URI = "${audioUri}"
-						window.MATERIAL_ICONS_BASE_URI = "${materialIconsUri}"
-					</script>
-					<title>Roo Code</title>
-				</head>
-				<body>
-					<div id="root"></div>
-					${reactRefresh}
-					<script type="module" src="${scriptUri}"></script>
-				</body>
-			</html>
-		`
+		return getHMRHtmlContent(this, webview)
 	}
 
-	/**
-	 * Defines and returns the HTML that should be rendered within the webview panel.
-	 *
-	 * @remarks This is also the place where references to the React webview build files
-	 * are created and inserted into the webview HTML.
-	 *
-	 * @param webview A reference to the extension webview
-	 * @param extensionUri The URI of the directory containing the extension
-	 * @returns A template string literal containing the HTML that should be
-	 * rendered within the webview panel
-	 */
 	private async getHtmlContent(webview: vscode.Webview): Promise<string> {
-		// Get the local path to main script run in the webview,
-		// then convert it to a uri we can use in the webview.
-
-		// The CSS file from the React build output
-		const stylesUri = getUri(webview, this.contextProxy.extensionUri, [
-			"webview-ui",
-			"build",
-			"assets",
-			"index.css",
-		])
-
-		const scriptUri = getUri(webview, this.contextProxy.extensionUri, ["webview-ui", "build", "assets", "index.js"])
-		const codiconsUri = getUri(webview, this.contextProxy.extensionUri, ["assets", "codicons", "codicon.css"])
-		const materialIconsUri = getUri(webview, this.contextProxy.extensionUri, [
-			"assets",
-			"vscode-material-icons",
-			"icons",
-		])
-		const imagesUri = getUri(webview, this.contextProxy.extensionUri, ["assets", "images"])
-		const audioUri = getUri(webview, this.contextProxy.extensionUri, ["webview-ui", "audio"])
-
-		// Use a nonce to only allow a specific script to be run.
-		/*
-		content security policy of your webview to only allow scripts that have a specific nonce
-		create a content security policy meta tag so that only loading scripts with a nonce is allowed
-		As your extension grows you will likely want to add custom styles, fonts, and/or images to your webview. If you do, you will need to update the content security policy meta tag to explicitly allow for these resources. E.g.
-				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; img-src ${webview.cspSource} https:; script-src 'nonce-${nonce}';">
-		- 'unsafe-inline' is required for styles due to vscode-webview-toolkit's dynamic style injection
-		- since we pass base64 images to the webview, we need to specify img-src ${webview.cspSource} data:;
-
-		in meta tag we add nonce attribute: A cryptographic nonce (only used once) to allow scripts. The server must generate a unique nonce value each time it transmits a policy. It is critical to provide a nonce that cannot be guessed as bypassing a resource's policy is otherwise trivial.
-		*/
-		const nonce = getNonce()
-
-		// Get the OpenRouter base URL from configuration
-		const { apiConfiguration } = await this.getState()
-		const openRouterBaseUrl = apiConfiguration.openRouterBaseUrl || "https://openrouter.ai"
-		// Extract the domain for CSP
-		const openRouterDomain = openRouterBaseUrl.match(/^(https?:\/\/[^\/]+)/)?.[1] || "https://openrouter.ai"
-
-		// Tip: Install the es6-string-html VS Code extension to enable code highlighting below
-		return /*html*/ `
-        <!DOCTYPE html>
-        <html lang="en">
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no">
-            <meta name="theme-color" content="#000000">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} https://storage.googleapis.com https://img.clerk.com data:; media-src ${webview.cspSource}; script-src ${webview.cspSource} 'wasm-unsafe-eval' 'nonce-${nonce}' 'strict-dynamic'; connect-src ${webview.cspSource} ${openRouterDomain} https://api.requesty.ai;">
-            <link rel="stylesheet" type="text/css" href="${stylesUri}">
-			<link href="${codiconsUri}" rel="stylesheet" />
-			<script nonce="${nonce}">
-				window.IMAGES_BASE_URI = "${imagesUri}"
-				window.AUDIO_BASE_URI = "${audioUri}"
-				window.MATERIAL_ICONS_BASE_URI = "${materialIconsUri}"
-			</script>
-            <title>Roo Code</title>
-          </head>
-          <body>
-            <noscript>You need to enable JavaScript to run this app.</noscript>
-            <div id="root"></div>
-            <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
-          </body>
-        </html>
-      `
+		return getHtmlContent(this, webview)
 	}
 
 	/**
@@ -1921,6 +1876,10 @@ export class ClineProvider
 		// Ensure the store is initialized before reading task history
 		await this.taskHistoryStore.initialized
 
+		const allTaskHistory = this.taskHistoryStore.getAll()
+		const filteredTaskHistory = allTaskHistory.filter((item: HistoryItem) => item.ts && item.task)
+		// console.log(`[ClineProvider] getStateToPostToWebview: taskHistoryStore.getAll()=${allTaskHistory.length}, filtered=${filteredTaskHistory.length}`)
+
 		const {
 			apiConfiguration,
 			lastShownAnnouncementId,
@@ -1938,6 +1897,7 @@ export class ClineProvider
 			alwaysAllowSubtasks,
 			allowedMaxRequests,
 			allowedMaxCost,
+			requestDelaySeconds,
 			autoCondenseContext,
 			autoCondenseContextPercent,
 			soundEnabled,
@@ -1950,17 +1910,22 @@ export class ClineProvider
 			writeDelayMs,
 			terminalShellIntegrationTimeout,
 			terminalShellIntegrationDisabled,
+			terminalOutputPreviewSize,
 			terminalCommandDelay,
 			terminalPowershellCounter,
 			terminalZshClearEolMark,
 			terminalZshOhMy,
 			terminalZshP10k,
 			terminalZdotdir,
+			execaShellPath,
+			diagnosticsEnabled,
 			mcpEnabled,
+			mcpServers,
 			currentApiConfigName,
 			listApiConfigMeta,
 			pinnedApiConfigs,
 			mode,
+			modeApiConfigs,
 			customModePrompts,
 			customSupportPrompts,
 			enhancementApiConfigId,
@@ -1973,6 +1938,7 @@ export class ClineProvider
 			showRooIgnoredFiles,
 			enableSubfolderRules,
 			language,
+			showWorktreesInHomeScreen,
 			maxImageFileSize,
 			maxTotalImageSize,
 			historyPreviewCollapsed,
@@ -2018,6 +1984,7 @@ export class ClineProvider
 			alwaysAllowSubtasks: alwaysAllowSubtasks ?? false,
 			allowedMaxRequests,
 			allowedMaxCost,
+			requestDelaySeconds,
 			autoCondenseContext: autoCondenseContext ?? true,
 			autoCondenseContextPercent: autoCondenseContextPercent ?? 100,
 			uriScheme: vscode.env.uriScheme,
@@ -2026,7 +1993,7 @@ export class ClineProvider
 			clineMessages: currentTask?.clineMessages || [],
 			currentTaskTodos: currentTask?.todoList || [],
 			messageQueue: currentTask?.messageQueueService?.messages,
-			taskHistory: this.taskHistoryStore.getAll().filter((item: HistoryItem) => item.ts && item.task),
+			taskHistory: filteredTaskHistory,
 			soundEnabled: soundEnabled ?? false,
 			ttsEnabled: ttsEnabled ?? false,
 			ttsSpeed: ttsSpeed ?? 1.0,
@@ -2039,24 +2006,28 @@ export class ClineProvider
 			writeDelayMs: writeDelayMs ?? DEFAULT_WRITE_DELAY_MS,
 			terminalShellIntegrationTimeout: terminalShellIntegrationTimeout ?? Terminal.defaultShellIntegrationTimeout,
 			terminalShellIntegrationDisabled: terminalShellIntegrationDisabled ?? true,
+			terminalOutputPreviewSize,
 			terminalCommandDelay: terminalCommandDelay ?? 0,
 			terminalPowershellCounter: terminalPowershellCounter ?? false,
 			terminalZshClearEolMark: terminalZshClearEolMark ?? true,
 			terminalZshOhMy: terminalZshOhMy ?? false,
 			terminalZshP10k: terminalZshP10k ?? false,
 			terminalZdotdir: terminalZdotdir ?? false,
+			execaShellPath,
+			diagnosticsEnabled: diagnosticsEnabled ?? true,
 			mcpEnabled: mcpEnabled ?? true,
+			mcpServers: mcpServers ?? [],
 			currentApiConfigName: currentApiConfigName ?? "default",
 			listApiConfigMeta: listApiConfigMeta ?? [],
 			pinnedApiConfigs: pinnedApiConfigs ?? {},
 			mode: mode ?? defaultModeSlug,
+			modeApiConfigs: modeApiConfigs ?? ({} as Record<Mode, string>),
 			customModePrompts: customModePrompts ?? {},
 			customSupportPrompts: customSupportPrompts ?? {},
 			enhancementApiConfigId,
 			autoApprovalEnabled: autoApprovalEnabled ?? false,
 			customModes,
 			experiments: experiments ?? experimentDefault,
-			mcpServers: this.mcpHub?.getAllServers() ?? [],
 			maxOpenTabsContext: maxOpenTabsContext ?? 20,
 			maxWorkspaceFiles: maxWorkspaceFiles ?? 200,
 			cwd,
@@ -2064,6 +2035,7 @@ export class ClineProvider
 			showRooIgnoredFiles: showRooIgnoredFiles ?? false,
 			enableSubfolderRules: enableSubfolderRules ?? false,
 			language: language ?? formatLanguage(vscode.env.language),
+			showWorktreesInHomeScreen,
 			renderContext: this.renderContext,
 			maxImageFileSize: maxImageFileSize ?? 5,
 			maxTotalImageSize: maxTotalImageSize ?? 20,
@@ -2129,6 +2101,7 @@ export class ClineProvider
 	> {
 		const stateValues = this.contextProxy.getValues()
 		const customModes = await this.customModesManager.getCustomModes()
+		// console.log(`[ClineProvider] getState: customModes count=${customModes.length}, modes=[${customModes.map(m => m.slug).join(", ") || "(empty)"}]`)
 
 		// Determine apiProvider with the same logic as before, while filtering retired providers.
 		const apiProvider: ProviderName =
@@ -2167,6 +2140,7 @@ export class ClineProvider
 			alwaysAllowFollowupQuestions: stateValues.alwaysAllowFollowupQuestions ?? false,
 			followupAutoApproveTimeoutMs: stateValues.followupAutoApproveTimeoutMs ?? 60000,
 			diagnosticsEnabled: stateValues.diagnosticsEnabled ?? true,
+			requestDelaySeconds: stateValues.requestDelaySeconds,
 			allowedMaxRequests: stateValues.allowedMaxRequests,
 			allowedMaxCost: stateValues.allowedMaxCost,
 			autoCondenseContext: stateValues.autoCondenseContext ?? true,
@@ -2184,16 +2158,45 @@ export class ClineProvider
 			terminalShellIntegrationTimeout:
 				stateValues.terminalShellIntegrationTimeout ?? Terminal.defaultShellIntegrationTimeout,
 			terminalShellIntegrationDisabled: stateValues.terminalShellIntegrationDisabled ?? true,
+			terminalOutputPreviewSize: stateValues.terminalOutputPreviewSize,
 			terminalCommandDelay: stateValues.terminalCommandDelay ?? 0,
 			terminalPowershellCounter: stateValues.terminalPowershellCounter ?? false,
 			terminalZshClearEolMark: stateValues.terminalZshClearEolMark ?? true,
 			terminalZshOhMy: stateValues.terminalZshOhMy ?? false,
 			terminalZshP10k: stateValues.terminalZshP10k ?? false,
 			terminalZdotdir: stateValues.terminalZdotdir ?? false,
+			execaShellPath: stateValues.execaShellPath,
 			mode: stateValues.mode ?? defaultModeSlug,
 			language: stateValues.language ?? formatLanguage(vscode.env.language),
+			showWorktreesInHomeScreen: stateValues.showWorktreesInHomeScreen,
 			mcpEnabled: stateValues.mcpEnabled ?? true,
-			mcpServers: this.mcpHub?.getAllServers() ?? [],
+			mcpServers: (() => {
+				const mcpHubServers = this.mcpHub?.getAllServers() ?? []
+				const globalConfigServers = stateValues.mcpServers
+				// this.log(`[ClineProvider] getState mcpServers: mcpHub count=${mcpHubServers.length}, globalConfig count=${globalConfigServers ? Object.keys(globalConfigServers).length : 0}`)
+
+				if (mcpHubServers.length > 0) {
+					return mcpHubServers
+				}
+
+				// Fallback: when McpHub has no servers (e.g., initialization failed early),
+				// generate placeholder server entries from the global config so the settings
+				// page still displays the configured servers.
+				if (globalConfigServers && typeof globalConfigServers === "object" && !Array.isArray(globalConfigServers)) {
+					return Object.entries(globalConfigServers).map(([name, config]) => ({
+						name,
+						config: typeof config === "string" ? config : JSON.stringify(config),
+						status: "disconnected" as const,
+						source: "global" as const,
+						disabled: (config as any)?.disabled,
+						timeout: (config as any)?.timeout,
+						error: "Failed to initialize",
+						errorHistory: [],
+					}))
+				}
+
+				return []
+			})(),
 			currentApiConfigName: stateValues.currentApiConfigName ?? "default",
 			listApiConfigMeta: stateValues.listApiConfigMeta ?? [],
 			pinnedApiConfigs: stateValues.pinnedApiConfigs ?? {},
@@ -2379,7 +2382,7 @@ export class ClineProvider
 
 		await this.contextProxy.resetAllState()
 		await this.providerSettingsManager.resetAllConfigs()
-		await this.customModesManager.resetCustomModes()
+		await this.customModesManager.resetAllCustomModes()
 		await this.removeClineFromStack()
 		await this.postStateToWebview()
 		await this.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
@@ -2408,6 +2411,21 @@ export class ClineProvider
 
 	public getMcpHub(): McpHub | undefined {
 		return this.mcpHub
+	}
+
+	public getMcpServersFromGlobalConfig(): Record<string, any> | undefined {
+		const values = this.contextProxy.getValues()
+		const mcpServers = values.mcpServers
+		// this.log(`[ClineProvider] getMcpServersFromGlobalConfig: mcpServers = ${mcpServers ? JSON.stringify(Object.keys(mcpServers)) : "undefined/null"}`)
+		return mcpServers
+	}
+
+	public getMcpEnabledFromGlobalConfig(): boolean {
+		return this.contextProxy.getValues().mcpEnabled ?? true
+	}
+
+	public async saveMcpServersToGlobalConfig(mcpServers: Record<string, any>): Promise<void> {
+		await this.contextProxy.setValue("mcpServers", mcpServers)
 	}
 
 	public getSkillsManager(): SkillsManager | undefined {
@@ -2785,130 +2803,7 @@ export class ClineProvider
 		initialTodos: TodoItem[]
 		mode: string
 	}): Promise<Task> {
-		const { parentTaskId, message, initialTodos, mode } = params
-
-		// Metadata-driven delegation is always enabled
-
-		// 1) Get parent (must be current task)
-		const parent = this.getCurrentTask()
-		if (!parent) {
-			throw new Error("[delegateParentAndOpenChild] No current task")
-		}
-		if (parent.taskId !== parentTaskId) {
-			throw new Error(
-				`[delegateParentAndOpenChild] Parent mismatch: expected ${parentTaskId}, current ${parent.taskId}`,
-			)
-		}
-		// 2) Flush pending tool results to API history BEFORE disposing the parent.
-		//    This is critical: when tools are called before new_task,
-		//    their tool_result blocks are in userMessageContent but not yet saved to API history.
-		//    If we don't flush them, the parent's API conversation will be incomplete and
-		//    cause 400 errors when resumed (missing tool_result for tool_use blocks).
-		//
-		//    NOTE: We do NOT pass the assistant message here because the assistant message
-		//    is already added to apiConversationHistory by the normal flow in
-		//    recursivelyMakeClineRequests BEFORE tools start executing. We only need to
-		//    flush the pending user message with tool_results.
-		try {
-			const flushSuccess = await parent.flushPendingToolResultsToHistory()
-
-			if (!flushSuccess) {
-				console.warn(`[delegateParentAndOpenChild] Flush failed for parent ${parentTaskId}, retrying...`)
-				const retrySuccess = await parent.retrySaveApiConversationHistory()
-
-				if (!retrySuccess) {
-					console.error(
-						`[delegateParentAndOpenChild] CRITICAL: Parent ${parentTaskId} API history not persisted to disk. Child return may produce stale state.`,
-					)
-					vscode.window.showWarningMessage(
-						"Warning: Parent task state could not be saved. The parent task may lose recent context when resumed.",
-					)
-				}
-			}
-		} catch (error) {
-			this.log(
-				`[delegateParentAndOpenChild] Error flushing pending tool results (non-fatal): ${
-					error instanceof Error ? error.message : String(error)
-				}`,
-			)
-		}
-
-		// 3) Enforce single-open invariant by closing/disposing the parent first
-		//    This ensures we never have >1 tasks open at any time during delegation.
-		//    Await abort completion to ensure clean disposal and prevent unhandled rejections.
-		try {
-			await this.removeClineFromStack({ skipDelegationRepair: true })
-		} catch (error) {
-			this.log(
-				`[delegateParentAndOpenChild] Error during parent disposal (non-fatal): ${
-					error instanceof Error ? error.message : String(error)
-				}`,
-			)
-			// Non-fatal: proceed with child creation even if parent cleanup had issues
-		}
-
-		// 3) Switch provider mode to child's requested mode BEFORE creating the child task
-		//    This ensures the child's system prompt and configuration are based on the correct mode.
-		//    The mode switch must happen before createTask() because the Task constructor
-		//    initializes its mode from provider.getState() during initializeTaskMode().
-		try {
-			await this.handleModeSwitch(mode as any)
-		} catch (e) {
-			this.log(
-				`[delegateParentAndOpenChild] handleModeSwitch failed for mode '${mode}': ${
-					(e as Error)?.message ?? String(e)
-				}`,
-			)
-		}
-
-		// 4) Create child as sole active (parent reference preserved for lineage)
-		// Pass initialStatus: "active" to ensure the child task's historyItem is created
-		// with status from the start, avoiding race conditions where the task might
-		// call attempt_completion before status is persisted separately.
-		//
-		// Pass startTask: false to prevent the child from beginning its task loop
-		// (and writing to globalState via saveClineMessages → updateTaskHistory)
-		// before we persist the parent's delegation metadata in step 5.
-		// Without this, the child's fire-and-forget startTask() races with step 5,
-		// and the last writer to globalState overwrites the other's changes—
-		// causing the parent's delegation fields to be lost.
-		const child = await this.createTask(message, undefined, parent as any, {
-			initialTodos,
-			initialStatus: "active",
-			startTask: false,
-		})
-
-		// 5) Persist parent delegation metadata BEFORE the child starts writing.
-		try {
-			const { historyItem } = await this.getTaskWithId(parentTaskId)
-			const childIds = Array.from(new Set([...(historyItem.childIds ?? []), child.taskId]))
-			const updatedHistory: typeof historyItem = {
-				...historyItem,
-				status: "delegated",
-				delegatedToId: child.taskId,
-				awaitingChildId: child.taskId,
-				childIds,
-			}
-			await this.updateTaskHistory(updatedHistory)
-		} catch (err) {
-			this.log(
-				`[delegateParentAndOpenChild] Failed to persist parent metadata for ${parentTaskId} -> ${child.taskId}: ${
-					(err as Error)?.message ?? String(err)
-				}`,
-			)
-		}
-
-		// 6) Start the child task now that parent metadata is safely persisted.
-		child.start()
-
-		// 7) Emit TaskDelegated (provider-level)
-		try {
-			this.emit(RooCodeEventName.TaskDelegated, parentTaskId, child.taskId)
-		} catch {
-			// non-fatal
-		}
-
-		return child
+		return delegateParentAndOpenChild(this, params)
 	}
 
 	/**
@@ -2919,195 +2814,7 @@ export class ClineProvider
 		childTaskId: string
 		completionResultSummary: string
 	}): Promise<void> {
-		const { parentTaskId, childTaskId, completionResultSummary } = params
-		const globalStoragePath = this.contextProxy.globalStorageUri.fsPath
-
-		// 1) Load parent from history and current persisted messages
-		const { historyItem } = await this.getTaskWithId(parentTaskId)
-
-		let parentClineMessages: ClineMessage[] = []
-		try {
-			parentClineMessages = await readTaskMessages({
-				taskId: parentTaskId,
-				globalStoragePath,
-			})
-		} catch {
-			parentClineMessages = []
-		}
-
-		let parentApiMessages: any[] = []
-		try {
-			parentApiMessages = (await readApiMessages({
-				taskId: parentTaskId,
-				globalStoragePath,
-			})) as any[]
-		} catch {
-			parentApiMessages = []
-		}
-
-		// 2) Inject synthetic records: UI subtask_result and update API tool_result
-		const ts = Date.now()
-
-		// Defensive: ensure arrays
-		if (!Array.isArray(parentClineMessages)) parentClineMessages = []
-		if (!Array.isArray(parentApiMessages)) parentApiMessages = []
-
-		const subtaskUiMessage: ClineMessage = {
-			type: "say",
-			say: "subtask_result",
-			text: completionResultSummary,
-			ts,
-		}
-		parentClineMessages.push(subtaskUiMessage)
-		await saveTaskMessages({ messages: parentClineMessages, taskId: parentTaskId, globalStoragePath })
-
-		// Find the tool_use_id from the last assistant message's new_task tool_use
-		let toolUseId: string | undefined
-		for (let i = parentApiMessages.length - 1; i >= 0; i--) {
-			const msg = parentApiMessages[i]
-			if (msg.role === "assistant" && Array.isArray(msg.content)) {
-				for (const block of msg.content) {
-					if (block.type === "tool_use" && block.name === "new_task") {
-						toolUseId = block.id
-						break
-					}
-				}
-				if (toolUseId) break
-			}
-		}
-
-		// Preferred: if the parent history contains the native tool_use for new_task,
-		// inject a matching tool_result for the Anthropic message contract:
-		// user → assistant (tool_use) → user (tool_result)
-		if (toolUseId) {
-			// Check if the last message is already a user message with a tool_result for this tool_use_id
-			// (in case this is a retry or the history was already updated)
-			const lastMsg = parentApiMessages[parentApiMessages.length - 1]
-			let alreadyHasToolResult = false
-			if (lastMsg?.role === "user" && Array.isArray(lastMsg.content)) {
-				for (const block of lastMsg.content) {
-					if (block.type === "tool_result" && block.tool_use_id === toolUseId) {
-						// Update the existing tool_result content
-						block.content = `Subtask ${childTaskId} completed.\n\nResult:\n${completionResultSummary}`
-						alreadyHasToolResult = true
-						break
-					}
-				}
-			}
-
-			// If no existing tool_result found, create a NEW user message with the tool_result
-			if (!alreadyHasToolResult) {
-				parentApiMessages.push({
-					role: "user",
-					content: [
-						{
-							type: "tool_result" as const,
-							tool_use_id: toolUseId,
-							content: `Subtask ${childTaskId} completed.\n\nResult:\n${completionResultSummary}`,
-						},
-					],
-					ts,
-				})
-			}
-
-			// Validate the newly injected tool_result against the preceding assistant message.
-			// This ensures the tool_result's tool_use_id matches a tool_use in the immediately
-			// preceding assistant message (Anthropic API requirement).
-			const lastMessage = parentApiMessages[parentApiMessages.length - 1]
-			if (lastMessage?.role === "user") {
-				const validatedMessage = validateAndFixToolResultIds(lastMessage, parentApiMessages.slice(0, -1))
-				parentApiMessages[parentApiMessages.length - 1] = validatedMessage
-			}
-		} else {
-			// If there is no corresponding tool_use in the parent API history, we cannot emit a
-			// tool_result. Fall back to a plain user text note so the parent can still resume.
-			parentApiMessages.push({
-				role: "user",
-				content: [
-					{
-						type: "text" as const,
-						text: `Subtask ${childTaskId} completed.\n\nResult:\n${completionResultSummary}`,
-					},
-				],
-				ts,
-			})
-		}
-
-		await saveApiMessages({ messages: parentApiMessages as any, taskId: parentTaskId, globalStoragePath })
-
-		// 3) Close child instance if still open (single-open-task invariant).
-		//    This MUST happen BEFORE updating the child's status to "completed" because
-		//    removeClineFromStack() → abortTask(true) → saveClineMessages() writes
-		//    the historyItem with initialStatus (typically "active"), which would
-		//    overwrite a "completed" status set earlier.
-		const current = this.getCurrentTask()
-		if (current?.taskId === childTaskId) {
-			await this.removeClineFromStack()
-		}
-
-		// 4) Update child metadata to "completed" status.
-		//    This runs after the abort so it overwrites the stale "active" status
-		//    that saveClineMessages() may have written during step 3.
-		try {
-			const { historyItem: childHistory } = await this.getTaskWithId(childTaskId)
-			await this.updateTaskHistory({
-				...childHistory,
-				status: "completed",
-			})
-		} catch (err) {
-			this.log(
-				`[reopenParentFromDelegation] Failed to persist child completed status for ${childTaskId}: ${
-					(err as Error)?.message ?? String(err)
-				}`,
-			)
-		}
-
-		// 5) Update parent metadata and persist BEFORE emitting completion event
-		const childIds = Array.from(new Set([...(historyItem.childIds ?? []), childTaskId]))
-		const updatedHistory: typeof historyItem = {
-			...historyItem,
-			status: "active",
-			completedByChildId: childTaskId,
-			completionResultSummary,
-			awaitingChildId: undefined,
-			childIds,
-		}
-		await this.updateTaskHistory(updatedHistory)
-
-		// 6) Emit TaskDelegationCompleted (provider-level)
-		try {
-			this.emit(RooCodeEventName.TaskDelegationCompleted, parentTaskId, childTaskId, completionResultSummary)
-		} catch {
-			// non-fatal
-		}
-
-		// 7) Reopen the parent from history as the sole active task (restores saved mode)
-		//    IMPORTANT: startTask=false to suppress resume-from-history ask scheduling
-		const parentInstance = await this.createTaskWithHistoryItem(updatedHistory, { startTask: false })
-
-		// 8) Inject restored histories into the in-memory instance before resuming
-		if (parentInstance) {
-			try {
-				await parentInstance.overwriteClineMessages(parentClineMessages)
-			} catch {
-				// non-fatal
-			}
-			try {
-				await parentInstance.overwriteApiConversationHistory(parentApiMessages as any)
-			} catch {
-				// non-fatal
-			}
-
-			// Auto-resume parent without ask("resume_task")
-			await parentInstance.resumeAfterDelegation()
-		}
-
-		// 9) Emit TaskDelegationResumed (provider-level)
-		try {
-			this.emit(RooCodeEventName.TaskDelegationResumed, parentTaskId, childTaskId)
-		} catch {
-			// non-fatal
-		}
+		return reopenParentFromDelegation(this, params)
 	}
 
 	/**

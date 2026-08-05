@@ -1,7 +1,7 @@
-import { safeWriteJson } from "../../utils/safeWriteJson"
 import os from "os"
 import * as path from "path"
 import fs from "fs/promises"
+import * as yaml from "yaml"
 
 import * as vscode from "vscode"
 import { z, ZodError } from "zod"
@@ -36,10 +36,6 @@ type ImportWithProviderOptions = ImportOptions & {
 	}
 }
 
-/**
- * Sanitizes a provider config by resetting invalid/removed apiProvider values.
- * Returns the sanitized config and a warning message if the provider was invalid.
- */
 function sanitizeProviderConfig(configName: string, apiConfig: unknown): { config: unknown; warning?: string } {
 	if (typeof apiConfig !== "object" || apiConfig === null) {
 		return { config: apiConfig }
@@ -47,10 +43,8 @@ function sanitizeProviderConfig(configName: string, apiConfig: unknown): { confi
 
 	const config = apiConfig as Record<string, unknown>
 
-	// Check if apiProvider is set and if it's still valid
 	if (config.apiProvider !== undefined && !isProviderName(config.apiProvider)) {
 		const invalidProvider = config.apiProvider
-		// Return a new config object without the invalid apiProvider
 		const { apiProvider, ...restConfig } = config
 		return {
 			config: restConfig,
@@ -61,21 +55,18 @@ function sanitizeProviderConfig(configName: string, apiConfig: unknown): { confi
 	return { config: apiConfig }
 }
 
-/**
- * Imports configuration from a specific file path
- * Shares base functionality for import settings for both the manual
- * and automatic settings importing.
- *
- * Uses lenient parsing to handle invalid/removed providers gracefully:
- * - Invalid apiProvider values are removed (profile is kept but needs reconfiguration)
- * - Completely invalid profiles are skipped
- * - Warnings are returned for any issues encountered
- */
+function parseFileContent(content: string, filePath: string): unknown {
+	if (filePath.endsWith(".yaml") || filePath.endsWith(".yml")) {
+		return yaml.parse(content)
+	}
+
+	return JSON.parse(content)
+}
+
 export async function importSettingsFromPath(
 	filePath: string,
 	{ providerSettingsManager, contextProxy, customModesManager }: ImportOptions,
 ) {
-	// Use a lenient schema that accepts any apiConfigs, then validate each individually
 	const lenientProviderProfilesSchema = providerProfilesSchema.extend({
 		apiConfigs: z.record(z.string(), z.any()),
 	})
@@ -83,38 +74,34 @@ export async function importSettingsFromPath(
 	const lenientSchema = z.object({
 		providerProfiles: lenientProviderProfilesSchema,
 		globalSettings: globalSettingsSchema.optional(),
+		secrets: z.unknown().optional(),
 	})
 
 	try {
 		const previousProviderProfiles = await providerSettingsManager.export()
 
-		const rawData = JSON.parse(await fs.readFile(filePath, "utf-8"))
+		const rawContent = await fs.readFile(filePath, "utf-8")
+		const rawData = parseFileContent(rawContent, filePath)
 		const { providerProfiles: rawProviderProfiles, globalSettings = {} } = lenientSchema.parse(rawData)
 
-		// Track warnings for profiles that had issues
 		const warnings: string[] = []
 		const validApiConfigs: Record<string, ProviderSettingsWithId> = {}
 
-		// Process each apiConfig individually with sanitization
 		for (const [configName, rawConfig] of Object.entries(rawProviderProfiles.apiConfigs)) {
-			// First sanitize to handle invalid apiProvider values
 			const { config: sanitizedConfig, warning } = sanitizeProviderConfig(configName, rawConfig)
 			if (warning) {
 				warnings.push(warning)
 			}
 
-			// Then validate the sanitized config
 			const result = providerSettingsWithIdSchema.safeParse(sanitizedConfig)
 			if (result.success) {
 				validApiConfigs[configName] = result.data
 			} else {
-				// Profile is completely invalid - skip it
 				const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ")
 				warnings.push(`Profile "${configName}" was skipped: ${issues}`)
 			}
 		}
 
-		// If no valid configs were imported and there were issues, report them
 		if (Object.keys(validApiConfigs).length === 0 && warnings.length > 0) {
 			return {
 				success: false,
@@ -122,10 +109,6 @@ export async function importSettingsFromPath(
 			}
 		}
 
-		// Determine the currentApiConfigName:
-		// 1. If the imported currentApiConfigName exists in validApiConfigs, use it
-		// 2. Otherwise, fall back to the first valid imported profile
-		// 3. If no valid profiles were imported, keep the previous currentApiConfigName
 		let currentApiConfigName = rawProviderProfiles.currentApiConfigName
 		const validProfileNames = Object.keys(validApiConfigs)
 		if (!validApiConfigs[currentApiConfigName]) {
@@ -135,7 +118,6 @@ export async function importSettingsFromPath(
 					`Profile "${rawProviderProfiles.currentApiConfigName}" was not available; defaulting to "${currentApiConfigName}".`,
 				)
 			} else {
-				// No valid imported profiles; keep the existing currentApiConfigName
 				currentApiConfigName = previousProviderProfiles.currentApiConfigName
 			}
 		}
@@ -156,25 +138,18 @@ export async function importSettingsFromPath(
 			(globalSettings.customModes ?? []).map((mode) => customModesManager.updateCustomMode(mode.slug, mode)),
 		)
 
-		// OpenAI Compatible settings are now correctly stored in codebaseIndexConfig
-		// They will be imported automatically with the config - no special handling needed
-
 		await providerSettingsManager.import(providerProfiles)
 		await contextProxy.setValues(globalSettings)
 
-		// Set the current provider.
 		const currentProviderName = providerProfiles.currentApiConfigName
 		const currentProvider = providerProfiles.apiConfigs[currentProviderName]
-		contextProxy.setValue("currentApiConfigName", currentProviderName)
+		await contextProxy.setValue("currentApiConfigName", currentProviderName)
 
-		// TODO: It seems like we don't need to have the provider settings in
-		// the proxy; we can just use providerSettingsManager as the source of
-		// truth.
 		if (currentProvider) {
-			contextProxy.setProviderSettings(currentProvider)
+			await contextProxy.setProviderSettings(currentProvider)
 		}
 
-		contextProxy.setValue("listApiConfigMeta", await providerSettingsManager.listConfig())
+		await contextProxy.setValue("listApiConfigMeta", await providerSettingsManager.listConfig())
 
 		return {
 			providerProfiles,
@@ -195,25 +170,25 @@ export async function importSettingsFromPath(
 	}
 }
 
-/**
- * Import settings from a file using a file dialog
- * @param options - Import options containing managers and proxy
- * @returns Promise resolving to import result
- */
 export const importSettings = async ({ providerSettingsManager, contextProxy, customModesManager }: ImportOptions) => {
-	// Use the last export path as a sensible default, falling back to Downloads
-	const defaultUri = resolveDefaultSaveUri(contextProxy, "lastSettingsExportPath", "roo-code-settings.json", {
+	const defaultUri = resolveDefaultSaveUri(contextProxy, "lastSettingsExportPath", "roo-code-settings.yaml", {
 		useWorkspace: false,
 		fallbackDir: path.join(os.homedir(), "Downloads"),
 	})
 
-	const uris = await vscode.window.showOpenDialog({
-		filters: { JSON: ["json"] },
-		canSelectMany: false,
-		defaultUri,
-	})
+	let uris: vscode.Uri[] | undefined
+	try {
+		uris = await vscode.window.showOpenDialog({
+			filters: { "Settings Files": ["yaml", "yml", "json"] },
+			canSelectMany: false,
+			defaultUri,
+		})
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error)
+		return { success: false, error: `Failed to open file dialog: ${errorMessage}` }
+	}
 
-	if (!uris) {
+	if (!uris || uris.length === 0) {
 		return { success: false, error: "User cancelled file selection" }
 	}
 
@@ -224,12 +199,6 @@ export const importSettings = async ({ providerSettingsManager, contextProxy, cu
 	})
 }
 
-/**
- * Import settings from a specific file
- * @param options - Import options containing managers and proxy
- * @param fileUri - URI of the file to import from
- * @returns Promise resolving to import result
- */
 export const importSettingsFromFile = async (
 	{ providerSettingsManager, contextProxy, customModesManager }: ImportOptions,
 	fileUri: vscode.Uri,
@@ -248,7 +217,7 @@ export const exportSettings = async ({ providerSettingsManager, contextProxy }: 
 	})
 
 	const uri = await vscode.window.showSaveDialog({
-		filters: { JSON: ["json"] },
+		filters: { "JSON": ["json"], "YAML": ["yaml", "yml"] },
 		defaultUri,
 	})
 
@@ -262,32 +231,25 @@ export const exportSettings = async ({ providerSettingsManager, contextProxy }: 
 		const providerProfiles = await providerSettingsManager.export()
 		const globalSettings = await contextProxy.export()
 
-		// It's okay if there are no global settings, but if there are no
-		// provider profile configured then don't export. If we wanted to
-		// support this case then the `importSettings` function would need to
-		// be updated to handle the case where there are no provider profiles.
 		if (typeof providerProfiles === "undefined") {
 			return
 		}
 
-		// OpenAI Compatible settings are now correctly stored in codebaseIndexConfig
-		// No workaround needed - they will be exported automatically with the config
-
 		const dirname = path.dirname(uri.fsPath)
 		await fs.mkdir(dirname, { recursive: true })
-		await safeWriteJson(uri.fsPath, { providerProfiles, globalSettings })
+
+		const exportData = { providerProfiles, globalSettings }
+
+		if (uri.fsPath.endsWith(".yaml") || uri.fsPath.endsWith(".yml")) {
+			await fs.writeFile(uri.fsPath, yaml.stringify(exportData, { indent: 2, lineWidth: -1 }), "utf-8")
+		} else {
+			await fs.writeFile(uri.fsPath, JSON.stringify(exportData, null, 2), "utf-8")
+		}
 	} catch (e) {
 		console.error("Failed to export settings:", e)
-		// Don't re-throw - the UI will handle showing error messages
 	}
 }
 
-/**
- * Import settings with complete UI feedback and provider state updates
- * @param options - Import options with provider instance
- * @param filePath - Optional file path to import from. If not provided, a file dialog will be shown.
- * @returns Promise that resolves when import is complete
- */
 export const importSettingsWithFeedback = async (
 	{ providerSettingsManager, contextProxy, customModesManager, provider }: ImportWithProviderOptions,
 	filePath?: string,
@@ -295,9 +257,7 @@ export const importSettingsWithFeedback = async (
 	let result
 
 	if (filePath) {
-		// Validate file path and check if file exists
 		try {
-			// Check if file exists and is readable
 			await fs.access(filePath, fs.constants.F_OK | fs.constants.R_OK)
 			result = await importSettingsFromPath(filePath, {
 				providerSettingsManager,
@@ -315,15 +275,14 @@ export const importSettingsWithFeedback = async (
 	}
 
 	if (result.success) {
-		provider.settingsImportedAt = Date.now()
+		const timestamp = Date.now()
+		provider.settingsImportedAt = timestamp
+		await provider.context.globalState.update("settingsImportedAt", timestamp)
 		await provider.postStateToWebview()
 
-		// Show warnings if any profiles had issues but were still imported (with modifications)
 		if (result.warnings && result.warnings.length > 0) {
-			// Log full details to the console for debugging
 			console.warn("Settings import completed with warnings:", result.warnings)
 
-			// Show a short summary in the toast notification
 			const count = result.warnings.length
 			const summary =
 				count === 1 ? `1 profile had issues during import.` : `${count} profiles had issues during import.`

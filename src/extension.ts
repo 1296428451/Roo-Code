@@ -1,5 +1,6 @@
 ﻿// Suppress punycode deprecation (Node 22)
-process.noDeprecation = true
+import process from "node:process"
+;(process as typeof process & { noDeprecation?: boolean }).noDeprecation = true
 
 import * as vscode from "vscode"
 import * as dotenvx from "@dotenvx/dotenvx"
@@ -27,7 +28,9 @@ import { initializeNetworkProxy } from "./utils/networkProxy"
 
 import { Package } from "./shared/package"
 import { formatLanguage } from "./shared/language"
+import { initSettingsStore, getSettingsStore } from "./services/SettingsStore"
 import { ContextProxy } from "./core/config/ContextProxy"
+import { getSettingsDirectoryPath } from "./utils/storage"
 import { ClineProvider } from "./core/webview/ClineProvider"
 import { DIFF_VIEW_URI_SCHEME } from "./integrations/editor/DiffViewProvider"
 import { TerminalRegistry } from "./integrations/terminal/TerminalRegistry"
@@ -144,7 +147,22 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.globalState.update("allowedCommands", defaultCommands)
 	}
 
+	// Initialize the settings store from globalStorage/settings, honoring custom storage paths.
+	const globalStoragePath = context.globalStorageUri.fsPath
+
+	const settingsDir = await getSettingsDirectoryPath(globalStoragePath)
+
+	const logToOutput = (message: string) => outputChannel.appendLine(message)
+	await initSettingsStore(settingsDir, logToOutput)
+
+	const store = getSettingsStore()
+	const migrationResult = await store.tryMigrateFromVscodeStorage(context)
+	if (migrationResult) {
+		await store.loadAll()
+	}
+
 	const contextProxy = await ContextProxy.getInstance(context)
+	contextProxy.setLogger(logToOutput)
 
 	// Initialize code index managers for all workspace folders.
 	const codeIndexManagers: CodeIndexManager[] = []
@@ -157,12 +175,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				codeIndexManagers.push(manager)
 
 				// Initialize in background; do not block extension activation
-				void manager.initialize(contextProxy).catch((error) => {
-					const message = error instanceof Error ? error.message : String(error)
-					outputChannel.appendLine(
-						`[CodeIndexManager] Error during background CodeIndexManager configuration/indexing for ${folder.uri.fsPath}: ${message}`,
-					)
-				})
+				void manager.initialize(contextProxy).catch(() => {})
 
 				context.subscriptions.push(manager)
 			}
@@ -170,6 +183,16 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 
 	const provider = new ClineProvider(context, outputChannel, "sidebar", contextProxy)
+	await provider.providerSettingsManager.initialize()
+	await provider.customModesManager.initialize()
+	await provider.mcpHubInitializationPromise
+
+	await contextProxy.dumpConfig()
+	{
+		const mcpHub = provider.getMcpHub()
+		const mcpHubServers = mcpHub?.getAllServers() ?? []
+		// logToOutput(`[McpHub] servers count: ${mcpHubServers.length}, names: [${mcpHubServers.map((s) => s.name).join(", ")}]`)
+	}
 
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ClineProvider.sideBarId, provider, {
@@ -186,6 +209,12 @@ export async function activate(context: vscode.ExtensionContext) {
 			providerSettingsManager: provider.providerSettingsManager,
 			contextProxy: provider.contextProxy,
 			customModesManager: provider.customModesManager,
+			onImportSuccess: async () => {
+				const timestamp = Date.now()
+				provider.settingsImportedAt = timestamp
+				await context.globalState.update("settingsImportedAt", timestamp)
+				await provider.postStateToWebview()
+			},
 		})
 	} catch (error) {
 		outputChannel.appendLine(

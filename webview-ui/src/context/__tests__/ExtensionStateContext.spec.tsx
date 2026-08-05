@@ -8,7 +8,7 @@ import {
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
 } from "@roo-code/types"
 
-import { ExtensionStateContextProvider, useExtensionState, mergeExtensionState } from "../ExtensionStateContext"
+import { ExtensionStateContextProvider, useExtensionState, mergeExtensionState, shouldShowWelcome } from "../ExtensionStateContext"
 
 const TestComponent = () => {
 	const { allowedCommands, setAllowedCommands, soundEnabled, showRooIgnoredFiles, setShowRooIgnoredFiles } =
@@ -180,6 +180,17 @@ describe("ExtensionStateContext", () => {
 				modelTemperature: 0.7, // Should add this from partial update
 			}),
 		)
+	})
+})
+
+describe("shouldShowWelcome", () => {
+	it("returns false when settings were imported from an existing config file", () => {
+		expect(shouldShowWelcome({ apiConfiguration: {}, settingsImportedAt: 1 })).toBe(false)
+	})
+
+	it("falls back to API configuration when settingsImportedAt is missing", () => {
+		expect(shouldShowWelcome({ apiConfiguration: {} })).toBe(true)
+		expect(shouldShowWelcome({ apiConfiguration: { apiKey: "test-key" } as ProviderSettings })).toBe(false)
 	})
 })
 

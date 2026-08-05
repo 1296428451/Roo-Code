@@ -12,17 +12,55 @@ import {
 	type ProviderName,
 	isProviderName,
 	isRetiredProvider,
+	SECRET_STATE_KEYS,
 } from "@roo-code/types"
 
 import { Mode, modes } from "../../shared/modes"
 import { buildApiHandler } from "../../api"
+import { getSettingsStore } from "../../services/SettingsStore"
 
-// Type-safe model migrations mapping
 type ModelMigrations = {
 	[K in ProviderName]?: Record<string, string>
 }
 
 const MODEL_MIGRATIONS: ModelMigrations = {} as const satisfies ModelMigrations
+
+function isValidBase64(str: string): boolean {
+	if (!str || str.length < 4) return false
+	try {
+		const decoded = Buffer.from(str, "base64").toString("utf-8")
+		const reEncoded = Buffer.from(decoded).toString("base64")
+		return reEncoded === str
+	} catch {
+		return false
+	}
+}
+
+function decodeBase64ApiKeys(apiConfig: Record<string, unknown>): Record<string, unknown> {
+	const decoded = { ...apiConfig }
+	for (const key of SECRET_STATE_KEYS) {
+		if (key in decoded && typeof decoded[key] === "string") {
+			const value = decoded[key] as string
+			if (isValidBase64(value)) {
+				decoded[key] = Buffer.from(value, "base64").toString("utf-8")
+			}
+		}
+	}
+	return decoded
+}
+
+function encodeBase64ApiKeys(apiConfig: Record<string, unknown>): Record<string, unknown> {
+	const encoded = { ...apiConfig }
+	for (const key of SECRET_STATE_KEYS) {
+		if (key in encoded && typeof encoded[key] === "string") {
+			const value = encoded[key] as string
+			if (!isValidBase64(value)) {
+				encoded[key] = Buffer.from(value).toString("base64")
+			}
+		}
+	}
+	return encoded
+}
 
 export const providerProfilesSchema = z.object({
 	currentApiConfigName: z.string(),
@@ -40,6 +78,8 @@ export const providerProfilesSchema = z.object({
 })
 
 export type ProviderProfiles = z.infer<typeof providerProfilesSchema>
+
+type LogFn = (message: string) => void
 
 export class ProviderSettingsManager {
 	private static readonly SCOPE_PREFIX = "roo_cline_config_"
@@ -60,28 +100,41 @@ export class ProviderSettingsManager {
 		},
 		modeApiConfigs: this.defaultModeApiConfigs,
 		migrations: {
-			rateLimitSecondsMigrated: true, // Mark as migrated on fresh installs
-			openAiHeadersMigrated: true, // Mark as migrated on fresh installs
-			consecutiveMistakeLimitMigrated: true, // Mark as migrated on fresh installs
-			todoListEnabledMigrated: true, // Mark as migrated on fresh installs
-			claudeCodeLegacySettingsMigrated: true, // Mark as migrated on fresh installs
+			rateLimitSecondsMigrated: true,
+			openAiHeadersMigrated: true,
+			consecutiveMistakeLimitMigrated: true,
+			todoListEnabledMigrated: true,
+			claudeCodeLegacySettingsMigrated: true,
 		},
 	}
 
 	private readonly context: ExtensionContext
+	private logFn: LogFn | null = null
 
 	constructor(context: ExtensionContext) {
 		this.context = context
 
-		// TODO: We really shouldn't have async methods in the constructor.
 		this.initialize().catch(console.error)
+	}
+
+	setLogger(logFn: LogFn | null) {
+		this.logFn = logFn
+	}
+
+	private log(message: string) {
+		if (this.logFn) {
+			this.logFn(message)
+		}
+	}
+
+	private get store() {
+		return getSettingsStore()
 	}
 
 	public generateId() {
 		return Math.random().toString(36).substring(2, 15)
 	}
 
-	// Synchronize readConfig/writeConfig operations to avoid data loss.
 	private _lock = Promise.resolve()
 	private lock<T>(cb: () => Promise<T>) {
 		const next = this._lock.then(cb)
@@ -89,24 +142,25 @@ export class ProviderSettingsManager {
 		return next
 	}
 
-	/**
-	 * Initialize config if it doesn't exist and run migrations.
-	 */
 	public async initialize() {
 		try {
 			return await this.lock(async () => {
 				const providerProfiles = await this.load()
 
-				if (!providerProfiles) {
-					await this.store(this.defaultProviderProfiles)
+				const numConfigs = Object.keys(providerProfiles.apiConfigs || {}).length
+				this.log(
+					`Loaded profiles: current=${providerProfiles.currentApiConfigName}, configs=${numConfigs}`,
+				)
+
+				if (!providerProfiles || numConfigs === 0) {
+					this.log(`No valid profiles loaded, saving default profiles...`)
+					await this.store.saveProviderProfiles(this.defaultProviderProfiles as unknown as Record<string, unknown>)
 					return
 				}
 
 				let isDirty = false
 
-				// Migrate existing installs to have per-mode API config map
 				if (!providerProfiles.modeApiConfigs) {
-					// Use the currently selected config for all modes initially
 					const currentName = providerProfiles.currentApiConfigName
 					const seedId =
 						providerProfiles.apiConfigs[currentName]?.id ??
@@ -116,12 +170,10 @@ export class ProviderSettingsManager {
 					isDirty = true
 				}
 
-				// Apply model migrations for all providers
 				if (this.applyModelMigrations(providerProfiles)) {
 					isDirty = true
 				}
 
-				// Ensure all configs have IDs.
 				for (const [_name, apiConfig] of Object.entries(providerProfiles.apiConfigs)) {
 					if (!apiConfig.id) {
 						apiConfig.id = this.generateId()
@@ -129,7 +181,6 @@ export class ProviderSettingsManager {
 					}
 				}
 
-				// Ensure migrations field exists
 				if (!providerProfiles.migrations) {
 					providerProfiles.migrations = {
 						rateLimitSecondsMigrated: false,
@@ -137,7 +188,7 @@ export class ProviderSettingsManager {
 						consecutiveMistakeLimitMigrated: false,
 						todoListEnabledMigrated: false,
 						claudeCodeLegacySettingsMigrated: false,
-					} // Initialize with default values
+					}
 					isDirty = true
 				}
 
@@ -166,9 +217,7 @@ export class ProviderSettingsManager {
 				}
 
 				if (!providerProfiles.migrations.claudeCodeLegacySettingsMigrated) {
-					// These keys were used by the removed local Claude Code CLI wrapper.
 					for (const apiConfig of Object.values(providerProfiles.apiConfigs)) {
-						// Cast to string for comparison since "claude-code" is no longer a valid ProviderName
 						if ((apiConfig.apiProvider as string) !== "claude-code") continue
 
 						const config = apiConfig as unknown as Record<string, unknown>
@@ -187,7 +236,20 @@ export class ProviderSettingsManager {
 				}
 
 				if (isDirty) {
-					await this.store(providerProfiles)
+					await this.store.saveProviderProfiles(providerProfiles as unknown as Record<string, unknown>)
+				}
+
+				// Sync modeApiConfigs from providerProfiles to globalSettings so
+				// that ContextProxy.getValues() and the frontend's getState() see them
+				const finalModeConfigs = providerProfiles.modeApiConfigs ?? {}
+				const existingInGlobal = (this.store as any).stateCache
+					? (this.store as any).stateCache.modeApiConfigs
+					: undefined
+				const finalStr = JSON.stringify(finalModeConfigs)
+				const existStr = JSON.stringify(existingInGlobal || {})
+				if (finalStr !== existStr) {
+					;(this.store.setGlobalState as any)("modeApiConfigs", finalModeConfigs)
+					await this.store.persistGlobalSettings()
 				}
 			})
 		} catch (error) {
@@ -206,7 +268,6 @@ export class ProviderSettingsManager {
 			}
 
 			if (rateLimitSeconds === undefined) {
-				// Failed to get the existing value, use the default.
 				rateLimitSeconds = 0
 			}
 
@@ -223,19 +284,13 @@ export class ProviderSettingsManager {
 	private async migrateOpenAiHeaders(providerProfiles: ProviderProfiles) {
 		try {
 			for (const [_name, apiConfig] of Object.entries(providerProfiles.apiConfigs)) {
-				// Use type assertion to access the deprecated property safely
 				const configAny = apiConfig as any
 
-				// Check if openAiHostHeader exists but openAiHeaders doesn't
 				if (
 					configAny.openAiHostHeader &&
 					(!apiConfig.openAiHeaders || Object.keys(apiConfig.openAiHeaders || {}).length === 0)
 				) {
-					// Create the headers object with the Host value
 					apiConfig.openAiHeaders = { Host: configAny.openAiHostHeader }
-
-					// Delete the old property to prevent re-migration
-					// This prevents the header from reappearing after deletion
 					configAny.openAiHostHeader = undefined
 				}
 			}
@@ -268,28 +323,21 @@ export class ProviderSettingsManager {
 		}
 	}
 
-	/**
-	 * Apply model migrations for all providers
-	 * Returns true if any migrations were applied
-	 */
 	private applyModelMigrations(providerProfiles: ProviderProfiles): boolean {
 		let migrated = false
 
 		try {
 			for (const [_name, apiConfig] of Object.entries(providerProfiles.apiConfigs)) {
-				// Skip configs without provider or model ID
 				if (!apiConfig.apiProvider || !apiConfig.apiModelId) {
 					continue
 				}
 
-				// Check if this provider has migrations (with type safety)
 				const provider = apiConfig.apiProvider as ProviderName
 				const providerMigrations = MODEL_MIGRATIONS[provider]
 				if (!providerMigrations) {
 					continue
 				}
 
-				// Check if the current model ID needs migration
 				const newModelId = providerMigrations[apiConfig.apiModelId]
 				if (newModelId && newModelId !== apiConfig.apiModelId) {
 					console.log(
@@ -306,13 +354,9 @@ export class ProviderSettingsManager {
 		return migrated
 	}
 
-	/**
-	 * Clean model ID by removing prefix before "/"
-	 */
 	private cleanModelId(modelId: string | undefined): string | undefined {
 		if (!modelId) return undefined
 
-		// Check for "/" and take the part after it
 		if (modelId.includes("/")) {
 			return modelId.split("/").pop()
 		}
@@ -320,9 +364,6 @@ export class ProviderSettingsManager {
 		return modelId
 	}
 
-	/**
-	 * List all available configs with metadata.
-	 */
 	public async listConfig(): Promise<ProviderSettingsEntry[]> {
 		try {
 			return await this.lock(async () => {
@@ -340,29 +381,21 @@ export class ProviderSettingsManager {
 		}
 	}
 
-	/**
-	 * Save a config with the given name.
-	 * Preserves the ID from the input 'config' object if it exists,
-	 * otherwise generates a new one (for creation scenarios).
-	 */
 	public async saveConfig(name: string, config: ProviderSettingsWithId): Promise<string> {
 		try {
 			return await this.lock(async () => {
 				const providerProfiles = await this.load()
-				// Preserve the existing ID if this is an update to an existing config.
 				const existingId = providerProfiles.apiConfigs[name]?.id
 				const id = config.id || existingId || this.generateId()
 
-				// For active providers, filter out settings from other providers.
-				// For retired providers, preserve full profile fields (including legacy
-				// provider-specific keys) to avoid data loss — passthrough() keeps
-				// unknown keys that strict parse() would strip.
 				const filteredConfig =
 					typeof config.apiProvider === "string" && isRetiredProvider(config.apiProvider)
 						? providerSettingsWithIdSchema.passthrough().parse(config)
 						: discriminatedProviderSettingsWithIdSchema.parse(config)
-				providerProfiles.apiConfigs[name] = { ...filteredConfig, id }
-				await this.store(providerProfiles)
+				
+				const encodedConfig = encodeBase64ApiKeys(filteredConfig as Record<string, unknown>)
+				providerProfiles.apiConfigs[name] = { ...encodedConfig, id } as ProviderSettingsWithId
+				await this.store.saveProviderProfiles(providerProfiles as unknown as Record<string, unknown>)
 				return id
 			})
 		} catch (error) {
@@ -402,16 +435,14 @@ export class ProviderSettingsManager {
 					providerSettings = entry[1]
 				}
 
-				return { name, ...providerSettings }
+				const decodedSettings = decodeBase64ApiKeys(providerSettings as Record<string, unknown>)
+				return { name, ...(decodedSettings as ProviderSettingsWithId) }
 			})
 		} catch (error) {
 			throw new Error(`Failed to get profile: ${error instanceof Error ? error.message : error}`)
 		}
 	}
 
-	/**
-	 * Activate a profile by name or ID.
-	 */
 	public async activateProfile(
 		params: { name: string } | { id: string },
 	): Promise<ProviderSettingsWithId & { name: string }> {
@@ -421,7 +452,7 @@ export class ProviderSettingsManager {
 			return await this.lock(async () => {
 				const providerProfiles = await this.load()
 				providerProfiles.currentApiConfigName = name
-				await this.store(providerProfiles)
+				await this.store.saveProviderProfiles(providerProfiles as unknown as Record<string, unknown>)
 				return { name, ...providerSettings }
 			})
 		} catch (error) {
@@ -429,9 +460,6 @@ export class ProviderSettingsManager {
 		}
 	}
 
-	/**
-	 * Delete a config by name.
-	 */
 	public async deleteConfig(name: string) {
 		try {
 			return await this.lock(async () => {
@@ -446,16 +474,13 @@ export class ProviderSettingsManager {
 				}
 
 				delete providerProfiles.apiConfigs[name]
-				await this.store(providerProfiles)
+				await this.store.saveProviderProfiles(providerProfiles as unknown as Record<string, unknown>)
 			})
 		} catch (error) {
 			throw new Error(`Failed to delete config: ${error}`)
 		}
 	}
 
-	/**
-	 * Check if a config exists by name.
-	 */
 	public async hasConfig(name: string) {
 		try {
 			return await this.lock(async () => {
@@ -467,29 +492,21 @@ export class ProviderSettingsManager {
 		}
 	}
 
-	/**
-	 * Set the API config for a specific mode.
-	 */
 	public async setModeConfig(mode: Mode, configId: string) {
 		try {
 			return await this.lock(async () => {
 				const providerProfiles = await this.load()
-				// Ensure the per-mode config map exists
 				if (!providerProfiles.modeApiConfigs) {
 					providerProfiles.modeApiConfigs = {}
 				}
-				// Assign the chosen config ID to this mode
 				providerProfiles.modeApiConfigs[mode] = configId
-				await this.store(providerProfiles)
+				await this.store.saveProviderProfiles(providerProfiles as unknown as Record<string, unknown>)
 			})
 		} catch (error) {
 			throw new Error(`Failed to set mode config: ${error}`)
 		}
 	}
 
-	/**
-	 * Get all mode-to-API-config mappings.
-	 */
 	public async getAllModeConfigs(): Promise<Record<string, string>> {
 		try {
 			return await this.lock(async () => {
@@ -501,9 +518,6 @@ export class ProviderSettingsManager {
 		}
 	}
 
-	/**
-	 * Get the API config ID for a specific mode.
-	 */
 	public async getModeConfigId(mode: Mode) {
 		try {
 			return await this.lock(async () => {
@@ -524,35 +538,27 @@ export class ProviderSettingsManager {
 					const apiProvider = configs[name].apiProvider
 
 					if (typeof apiProvider === "string" && isRetiredProvider(apiProvider)) {
-						// Preserve retired-provider profiles as-is to prevent dropping legacy fields.
 						continue
 					}
 
-					// Avoid leaking properties from other active providers.
 					configs[name] = discriminatedProviderSettingsWithIdSchema.parse(configs[name])
 
-					// If it has no apiProvider, skip filtering
 					if (!configs[name].apiProvider) {
 						continue
 					}
 
-					// Try to build an API handler to get model information
 					try {
 						const apiHandler = buildApiHandler(configs[name])
 						const modelInfo = apiHandler.getModel().info
 
-						// Check if the model supports reasoning budgets
 						const supportsReasoningBudget =
 							modelInfo.supportsReasoningBudget || modelInfo.requiredReasoningBudget
 
-						// If the model doesn't support reasoning budgets, remove the token fields
 						if (!supportsReasoningBudget) {
 							delete configs[name].modelMaxTokens
 							delete configs[name].modelMaxThinkingTokens
 						}
 					} catch (error) {
-						// If we can't build the API handler or get model info, skip filtering
-						// to avoid accidental data loss from incomplete configurations
 						console.warn(`Skipping token field filtering for config '${name}': ${error}`)
 					}
 				}
@@ -565,48 +571,61 @@ export class ProviderSettingsManager {
 
 	public async import(providerProfiles: ProviderProfiles) {
 		try {
-			return await this.lock(() => this.store(providerProfiles))
+			return await this.lock(async () => {
+				await this.store.saveProviderProfiles(providerProfiles as unknown as Record<string, unknown>)
+			})
 		} catch (error) {
 			throw new Error(`Failed to import provider profiles: ${error}`)
 		}
 	}
 
-	/**
-	 * Reset provider profiles by deleting them from secrets.
-	 */
 	public async resetAllConfigs() {
 		return await this.lock(async () => {
-			await this.context.secrets.delete(this.secretsKey)
+			await this.store.saveProviderProfiles({})
 		})
-	}
-
-	private get secretsKey() {
-		return `${ProviderSettingsManager.SCOPE_PREFIX}api_config`
 	}
 
 	private async load(): Promise<ProviderProfiles> {
 		try {
-			const content = await this.context.secrets.get(this.secretsKey)
+			const rawData = await this.store.loadProviderProfiles()
 
-			if (!content) {
+			if (!rawData) {
 				return this.defaultProviderProfiles
 			}
 
-			const providerProfiles = providerProfilesSchema
-				.extend({
-					apiConfigs: z.record(z.string(), z.any()),
-				})
-				.parse(JSON.parse(content))
+			const content = JSON.stringify(rawData)
+
+			let providerProfiles: any
+			try {
+				providerProfiles = providerProfilesSchema
+					.extend({
+						apiConfigs: z.record(z.string(), z.any()),
+					})
+					.parse(JSON.parse(content))
+			} catch (schemaError) {
+				// Try a more permissive parse - just take the raw data with any shape
+				try {
+					const permissiveParse = JSON.parse(content)
+					if (
+						permissiveParse &&
+						typeof permissiveParse === "object" &&
+						"apiConfigs" in permissiveParse &&
+						typeof permissiveParse.apiConfigs === "object" &&
+						Object.keys(permissiveParse.apiConfigs).length > 0
+					) {
+						providerProfiles = permissiveParse
+					} else {
+						throw schemaError
+					}
+				} catch {
+					throw schemaError
+				}
+			}
 
 			const apiConfigs = Object.entries(providerProfiles.apiConfigs).reduce(
 				(acc, [key, apiConfig]) => {
-					// First, sanitize invalid apiProvider values before parsing
-					// This handles removed providers (like "glama") gracefully
 					const sanitizedConfig = this.sanitizeProviderConfig(apiConfig)
 
-					// For retired providers, use passthrough() to preserve legacy
-					// provider-specific fields (e.g. groqApiKey, deepInfraModelId)
-					// that strict parse() would strip.
 					const providerValue =
 						typeof sanitizedConfig === "object" &&
 						sanitizedConfig !== null &&
@@ -618,28 +637,36 @@ export class ProviderSettingsManager {
 							? providerSettingsWithIdSchema.passthrough()
 							: providerSettingsWithIdSchema
 					const result = schema.safeParse(sanitizedConfig)
+					if (!result.success) {
+						this.log(
+							`load() - WARNING: apiConfig "${key}" failed schema validation for provider "${providerValue}". ` +
+							`Issues: ${JSON.stringify(result.error.issues)}`,
+						)
+						// Add the config anyway with partial parsing - don't drop user data
+						const partialConfig = { ...(sanitizedConfig as object) } as ProviderSettingsWithId
+						if (!partialConfig.id) {
+							partialConfig.id = this.generateId()
+						}
+						return { ...acc, [key]: partialConfig }
+					}
 					return result.success ? { ...acc, [key]: result.data } : acc
 				},
 				{} as Record<string, ProviderSettingsWithId>,
 			)
 
-			return {
+			const result = {
 				...providerProfiles,
 				apiConfigs: Object.fromEntries(
 					Object.entries(apiConfigs).filter(([_, apiConfig]) => apiConfig !== null),
 				),
 			}
+			return result
 		} catch (error) {
-			throw new Error(`Failed to read provider profiles from secrets: ${error}`)
+			this.log(`load() - CRITICAL ERROR: ${error instanceof Error ? error.message : String(error)}`)
+			throw new Error(`Failed to read provider profiles from storage: ${error}`)
 		}
 	}
 
-	/**
-	 * Sanitizes a provider config by resetting unknown apiProvider values.
-	 * Retired providers are preserved.
-	 * This handles cases where a user had a provider selected that was later removed
-	 * from the extension (e.g., "glama").
-	 */
 	private sanitizeProviderConfig(apiConfig: unknown): unknown {
 		if (typeof apiConfig !== "object" || apiConfig === null) {
 			return apiConfig
@@ -649,28 +676,14 @@ export class ProviderSettingsManager {
 
 		const apiProvider = config.apiProvider
 
-		// Check if apiProvider is set and if it's still recognized (active or retired)
 		if (
 			apiProvider !== undefined &&
 			(typeof apiProvider !== "string" || (!isProviderName(apiProvider) && !isRetiredProvider(apiProvider)))
 		) {
-			console.log(
-				`[ProviderSettingsManager] Sanitizing unknown provider "${config.apiProvider}" - resetting to undefined`,
-			)
-			// Return a new config object without the invalid apiProvider
-			// This effectively resets the profile so the user can select a valid provider
 			const { apiProvider, ...restConfig } = config
 			return restConfig
 		}
 
 		return apiConfig
-	}
-
-	private async store(providerProfiles: ProviderProfiles) {
-		try {
-			await this.context.secrets.store(this.secretsKey, JSON.stringify(providerProfiles, null, 2))
-		} catch (error) {
-			throw new Error(`Failed to write provider profiles to secrets: ${error}`)
-		}
 	}
 }

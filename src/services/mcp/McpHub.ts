@@ -17,7 +17,7 @@ import {
 import chokidar, { FSWatcher } from "chokidar"
 import delay from "delay"
 import deepEqual from "fast-deep-equal"
-import { z } from "zod"
+import type { z } from "zod"
 
 import type {
 	McpResource,
@@ -39,6 +39,14 @@ import { arePathsEqual, getWorkspacePath } from "../../utils/path"
 import { injectVariables } from "../../utils/config"
 import { safeWriteJson } from "../../utils/safeWriteJson"
 import { sanitizeMcpName, toolNamesMatch } from "../../utils/mcp-name"
+
+import {
+	ServerConfigSchema,
+	McpSettingsSchema,
+	validateServerConfig,
+} from "./mcpConfigValidator"
+
+export { ServerConfigSchema, McpSettingsSchema } from "./mcpConfigValidator"
 
 // Discriminated union for connection states
 export type ConnectedMcpConnection = {
@@ -63,93 +71,17 @@ export enum DisableReason {
 	SERVER_DISABLED = "serverDisabled",
 }
 
-// Base configuration schema for common settings
-const BaseConfigSchema = z.object({
-	disabled: z.boolean().optional(),
-	timeout: z.number().min(1).max(3600).optional().default(60),
-	alwaysAllow: z.array(z.string()).default([]),
-	watchPaths: z.array(z.string()).optional(), // paths to watch for changes and restart server
-	disabledTools: z.array(z.string()).default([]),
-})
-
-// Custom error messages for better user feedback
-const typeErrorMessage = "Server type must be 'stdio', 'sse', or 'streamable-http'"
-const stdioFieldsErrorMessage =
-	"For 'stdio' type servers, you must provide a 'command' field and can optionally include 'args' and 'env'"
-const sseFieldsErrorMessage =
-	"For 'sse' type servers, you must provide a 'url' field and can optionally include 'headers'"
-const streamableHttpFieldsErrorMessage =
-	"For 'streamable-http' type servers, you must provide a 'url' field and can optionally include 'headers'"
-const mixedFieldsErrorMessage =
-	"Cannot mix 'stdio' and ('sse' or 'streamable-http') fields. For 'stdio' use 'command', 'args', and 'env'. For 'sse'/'streamable-http' use 'url' and 'headers'"
-const missingFieldsErrorMessage =
-	"Server configuration must include either 'command' (for stdio) or 'url' (for sse/streamable-http) and a corresponding 'type' if 'url' is used."
-
-// Helper function to create a refined schema with better error messages
-const createServerTypeSchema = () => {
-	return z.union([
-		// Stdio config (has command field)
-		BaseConfigSchema.extend({
-			type: z.enum(["stdio"]).optional(),
-			command: z.string().min(1, "Command cannot be empty"),
-			args: z.array(z.string()).optional(),
-			cwd: z.string().default(() => vscode.workspace.workspaceFolders?.at(0)?.uri.fsPath ?? process.cwd()),
-			env: z.record(z.string()).optional(),
-			// Ensure no SSE fields are present
-			url: z.undefined().optional(),
-			headers: z.undefined().optional(),
-		})
-			.transform((data) => ({
-				...data,
-				type: "stdio" as const,
-			}))
-			.refine((data) => data.type === undefined || data.type === "stdio", { message: typeErrorMessage }),
-		// SSE config (has url field)
-		BaseConfigSchema.extend({
-			type: z.enum(["sse"]).optional(),
-			url: z.string().url("URL must be a valid URL format"),
-			headers: z.record(z.string()).optional(),
-			// Ensure no stdio fields are present
-			command: z.undefined().optional(),
-			args: z.undefined().optional(),
-			env: z.undefined().optional(),
-		})
-			.transform((data) => ({
-				...data,
-				type: "sse" as const,
-			}))
-			.refine((data) => data.type === undefined || data.type === "sse", { message: typeErrorMessage }),
-		// StreamableHTTP config (has url field)
-		BaseConfigSchema.extend({
-			type: z.enum(["streamable-http"]).optional(),
-			url: z.string().url("URL must be a valid URL format"),
-			headers: z.record(z.string()).optional(),
-			// Ensure no stdio fields are present
-			command: z.undefined().optional(),
-			args: z.undefined().optional(),
-			env: z.undefined().optional(),
-		})
-			.transform((data) => ({
-				...data,
-				type: "streamable-http" as const,
-			}))
-			.refine((data) => data.type === undefined || data.type === "streamable-http", {
-				message: typeErrorMessage,
-			}),
-	])
-}
-
-// Server configuration schema with automatic type inference and validation
-export const ServerConfigSchema = createServerTypeSchema()
-
-// Settings schema
-const McpSettingsSchema = z.object({
-	mcpServers: z.record(ServerConfigSchema),
-})
-
 export class McpHub {
 	private providerRef: WeakRef<ClineProvider>
+	private provider: ClineProvider
 	private disposables: vscode.Disposable[] = []
+
+	private log(_message: string): void {
+		// console.log(message)
+		// try {
+		// 	this.provider?.log(message)
+		// } catch (_) {}
+	}
 	private settingsWatcher?: vscode.FileSystemWatcher
 	private fileWatchers: Map<string, FSWatcher[]> = new Map()
 	private projectMcpWatcher?: vscode.FileSystemWatcher
@@ -165,6 +97,7 @@ export class McpHub {
 
 	constructor(provider: ClineProvider) {
 		this.providerRef = new WeakRef(provider)
+		this.provider = provider
 		this.watchMcpSettingsFile()
 		this.watchProjectMcpFile().catch(console.error)
 		this.setupWorkspaceFoldersWatcher()
@@ -205,71 +138,8 @@ export class McpHub {
 		}
 	}
 
-	/**
-	 * Validates and normalizes server configuration
-	 * @param config The server configuration to validate
-	 * @param serverName Optional server name for error messages
-	 * @returns The validated configuration
-	 * @throws Error if the configuration is invalid
-	 */
 	private validateServerConfig(config: any, serverName?: string): z.infer<typeof ServerConfigSchema> {
-		// Detect configuration issues before validation
-		const hasStdioFields = config.command !== undefined
-		const hasUrlFields = config.url !== undefined // Covers sse and streamable-http
-
-		// Check for mixed fields (stdio vs url-based)
-		if (hasStdioFields && hasUrlFields) {
-			throw new Error(mixedFieldsErrorMessage)
-		}
-
-		// Infer type for stdio if not provided
-		if (!config.type && hasStdioFields) {
-			config.type = "stdio"
-		}
-
-		// For url-based configs, type must be provided by the user
-		if (hasUrlFields && !config.type) {
-			throw new Error("Configuration with 'url' must explicitly specify 'type' as 'sse' or 'streamable-http'.")
-		}
-
-		// Validate type if provided
-		if (config.type && !["stdio", "sse", "streamable-http"].includes(config.type)) {
-			throw new Error(typeErrorMessage)
-		}
-
-		// Check for type/field mismatch
-		if (config.type === "stdio" && !hasStdioFields) {
-			throw new Error(stdioFieldsErrorMessage)
-		}
-		if (config.type === "sse" && !hasUrlFields) {
-			throw new Error(sseFieldsErrorMessage)
-		}
-		if (config.type === "streamable-http" && !hasUrlFields) {
-			throw new Error(streamableHttpFieldsErrorMessage)
-		}
-
-		// If neither command nor url is present (type alone is not enough)
-		if (!hasStdioFields && !hasUrlFields) {
-			throw new Error(missingFieldsErrorMessage)
-		}
-
-		// Validate the config against the schema
-		try {
-			return ServerConfigSchema.parse(config)
-		} catch (validationError) {
-			if (validationError instanceof z.ZodError) {
-				// Extract and format validation errors
-				const errorMessages = validationError.errors
-					.map((err) => `${err.path.join(".")}: ${err.message}`)
-					.join("; ")
-				throw new Error(
-					serverName
-						? `Invalid configuration for server "${serverName}": ${errorMessages}`
-						: `Invalid server configuration: ${errorMessages}`,
-				)
-			}
-			throw validationError
-		}
+		return validateServerConfig(config, serverName)
 	}
 
 	/**
@@ -278,7 +148,8 @@ export class McpHub {
 	 * @param error The error object
 	 */
 	private showErrorMessage(message: string, error: unknown): void {
-		console.error(`${message}:`, error)
+		const errorMessage = error instanceof Error ? error.message : String(error)
+		console.error(`${message}: ${errorMessage}`)
 	}
 
 	public setupWorkspaceFoldersWatcher(): void {
@@ -322,6 +193,7 @@ export class McpHub {
 	}
 
 	private async handleConfigFileChange(filePath: string, source: "global" | "project"): Promise<void> {
+		this.log(`[McpHub] handleConfigFileChange: filePath=${filePath}, source=${source}`)
 		try {
 			const content = await fs.readFile(filePath, "utf-8")
 			let config: any
@@ -345,6 +217,7 @@ export class McpHub {
 				return
 			}
 
+			this.log(`[McpHub] handleConfigFileChange: mcpServers keys=[${Object.keys(result.data.mcpServers || {}).join(", ")}], source=${source}`)
 			await this.updateServerConnections(result.data.mcpServers || {}, source)
 		} catch (error) {
 			// Check if the error is because the file doesn't exist
@@ -375,7 +248,7 @@ export class McpHub {
 			return
 		}
 
-		const workspaceFolder = this.providerRef.deref()?.cwd ?? getWorkspacePath()
+		const workspaceFolder = this.provider?.cwd ?? getWorkspacePath()
 		const projectMcpPattern = new vscode.RelativePattern(workspaceFolder, ".roo/mcp.json")
 
 		// Create a file system watcher for the project MCP file pattern
@@ -476,7 +349,7 @@ export class McpHub {
 	}
 
 	async getMcpServersPath(): Promise<string> {
-		const provider = this.providerRef.deref()
+		const provider = this.provider
 		if (!provider) {
 			throw new Error("Provider not available")
 		}
@@ -485,7 +358,7 @@ export class McpHub {
 	}
 
 	async getMcpSettingsFilePath(): Promise<string> {
-		const provider = this.providerRef.deref()
+		const provider = this.provider
 		if (!provider) {
 			throw new Error("Provider not available")
 		}
@@ -520,6 +393,40 @@ export class McpHub {
 		}
 
 		const settingsPath = await this.getMcpSettingsFilePath()
+		this.log(`[McpHub] watchMcpSettingsFile: settingsPath=${settingsPath}`)
+
+		// Sync the file with the global config when the file was just created with empty
+		// "mcpServers" by getMcpSettingsFilePath(). This prevents a race condition where the
+		// OS delivers a delayed file-creation notification after the watcher is set up, which
+		// would cause handleConfigFileChange to read the empty file and delete all connections.
+		const provider = this.provider
+		if (provider) {
+			try {
+				const content = await fs.readFile(settingsPath, "utf-8")
+				this.log(`[McpHub] watchMcpSettingsFile: file content before sync: ${content.slice(0, 200)}`)
+				const config = JSON.parse(content)
+				if (!config.mcpServers || Object.keys(config.mcpServers).length === 0) {
+					const globalConfigServers = provider.getMcpServersFromGlobalConfig()
+					this.log(`[McpHub] watchMcpSettingsFile: globalConfigServers keys=${globalConfigServers ? JSON.stringify(Object.keys(globalConfigServers)) : "undefined"}`)
+					if (
+						globalConfigServers &&
+						typeof globalConfigServers === "object" &&
+						!Array.isArray(globalConfigServers) &&
+						Object.keys(globalConfigServers).length > 0
+					) {
+						await safeWriteJson(settingsPath, { mcpServers: globalConfigServers }, { prettyPrint: true })
+						this.log(`[McpHub] watchMcpSettingsFile: synced file with global config, count=${Object.keys(globalConfigServers).length}`)
+					}
+				} else {
+					this.log(`[McpHub] watchMcpSettingsFile: file already has mcpServers, count=${Object.keys(config.mcpServers).length}`)
+				}
+			} catch (_) {
+				// If the file can't be read or parsed, that's fine — the watcher will handle
+				// changes once the file is properly written by the user or programmatic updates.
+				this.log(`[McpHub] watchMcpSettingsFile: error reading/syncing file: ${_}`)
+			}
+		}
+
 		const settingsUri = vscode.Uri.file(settingsPath)
 		const settingsPattern = new vscode.RelativePattern(path.dirname(settingsPath), path.basename(settingsPath))
 
@@ -545,37 +452,50 @@ export class McpHub {
 
 	private async initializeMcpServers(source: "global" | "project"): Promise<void> {
 		try {
-			const configPath =
-				source === "global" ? await this.getMcpSettingsFilePath() : await this.getProjectMcpPath()
+			let mcpServers: Record<string, any> = {}
 
-			if (!configPath) {
-				return
-			}
-
-			const content = await fs.readFile(configPath, "utf-8")
-			const config = JSON.parse(content)
-			const result = McpSettingsSchema.safeParse(config)
-
-			if (result.success) {
-				// Pass all servers including disabled ones - they'll be handled in updateServerConnections
-				await this.updateServerConnections(result.data.mcpServers || {}, source, false)
-			} else {
-				const errorMessages = result.error.errors
-					.map((err) => `${err.path.join(".")}: ${err.message}`)
-					.join("\n")
-				console.error(`Invalid ${source} MCP settings format:`, errorMessages)
-				vscode.window.showErrorMessage(t("mcp:errors.invalid_settings_validation", { errorMessages }))
-
-				if (source === "global") {
-					// Still try to connect with the raw config, but show warnings
-					try {
-						await this.updateServerConnections(config.mcpServers || {}, source, false)
-					} catch (error) {
-						this.showErrorMessage(`Failed to initialize ${source} MCP servers with raw config`, error)
+			if (source === "global") {
+				const provider = this.provider
+				this.log(`[McpHub] initializeMcpServers global: provider=${provider ? "exists" : "undefined"}`)
+				if (provider) {
+					const globalConfigServers = provider.getMcpServersFromGlobalConfig()
+					this.log(`[McpHub] getMcpServersFromGlobalConfig: keys=${globalConfigServers ? JSON.stringify(Object.keys(globalConfigServers)) : "undefined"}`)
+					if (globalConfigServers && Object.keys(globalConfigServers).length > 0) {
+						mcpServers = globalConfigServers
+						this.log(`[McpHub] Using globalConfigServers: count=${Object.keys(mcpServers).length}`)
 					}
 				}
+
+				if (Object.keys(mcpServers).length === 0) {
+					this.log(`[McpHub] globalConfigServers empty, trying mcp_settings.json fallback`)
+					const configPath = await this.getMcpSettingsFilePath()
+					if (configPath) {
+						const content = await fs.readFile(configPath, "utf-8")
+						const config = JSON.parse(content)
+						const result = McpSettingsSchema.safeParse(config)
+						if (result.success) {
+							mcpServers = result.data.mcpServers || {}
+							this.log(`[McpHub] mcp_settings.json loaded: count=${Object.keys(mcpServers).length}`)
+						}
+					}
+				}
+			} else {
+				const configPath = await this.getProjectMcpPath()
+				if (!configPath) {
+					return
+				}
+				const content = await fs.readFile(configPath, "utf-8")
+				const config = JSON.parse(content)
+				const result = McpSettingsSchema.safeParse(config)
+				if (result.success) {
+					mcpServers = result.data.mcpServers || {}
+				}
 			}
+
+			// console.log(`[McpHub] updateServerConnections: source=${source}, count=${Object.keys(mcpServers).length}`)
+			await this.updateServerConnections(mcpServers, source, false)
 		} catch (error) {
+			// console.error(`[McpHub] initializeMcpServers ${source} FAILED:`, error)
 			if (error instanceof SyntaxError) {
 				const errorMessage = t("mcp:errors.invalid_settings_syntax")
 				console.error(errorMessage, error)
@@ -592,7 +512,7 @@ export class McpHub {
 
 	// Get project-level MCP configuration path
 	private async getProjectMcpPath(): Promise<string | null> {
-		const workspacePath = this.providerRef.deref()?.cwd ?? getWorkspacePath()
+		const workspacePath = this.provider?.cwd ?? getWorkspacePath()
 		const projectMcpDir = path.join(workspacePath, ".roo")
 		const projectMcpPath = path.join(projectMcpDir, "mcp.json")
 
@@ -644,12 +564,12 @@ export class McpHub {
 	 * @returns Promise<boolean> indicating if MCP is enabled
 	 */
 	private async isMcpEnabled(): Promise<boolean> {
-		const provider = this.providerRef.deref()
+		const provider = this.provider
 		if (!provider) {
-			return true // Default to enabled if provider is not available
+			return true
 		}
-		const state = await provider.getState()
-		return state.mcpEnabled ?? true
+		const enabled = provider.getMcpEnabledFromGlobalConfig()
+		return enabled
 	}
 
 	private async connectToServer(
@@ -657,6 +577,8 @@ export class McpHub {
 		config: z.infer<typeof ServerConfigSchema>,
 		source: "global" | "project" = "global",
 	): Promise<void> {
+		// console.log(`[McpHub] connectToServer: name=${name}, source=${source}, type=${config.type}, disabled=${config.disabled}`)
+		this.log(`[McpHub] connectToServer: name=${name}, source=${source}, type=${config.type}, disabled=${config.disabled}`)
 		// Remove existing connection if it exists with the same source
 		await this.deleteConnection(name, source)
 
@@ -684,11 +606,20 @@ export class McpHub {
 		// Set up file watchers for enabled servers
 		this.setupFileWatcher(name, config, source)
 
+		// Push a placeholder connection BEFORE any potentially failing operations (e.g., new Client,
+		// injectVariables). This ensures the server always appears in the settings page even if
+		// initialization fails early.
+		const placeholderConn = this.createPlaceholderConnection(name, config, source, DisableReason.SERVER_DISABLED)
+		placeholderConn.server.disabled = false
+		placeholderConn.server.status = "connecting"
+		this.connections.push(placeholderConn)
+		this.log(`[McpHub] connectToServer: placeholder pushed for ${name}, connections count=${this.connections.length}`)
+
 		try {
 			const client = new Client(
 				{
 					name: "Roo Code",
-					version: this.providerRef.deref()?.context.extension?.packageJSON?.version ?? "1.0.0",
+					version: this.provider?.context.extension?.packageJSON?.version ?? "1.0.0",
 				},
 				{
 					capabilities: {},
@@ -702,6 +633,30 @@ export class McpHub {
 				env: process.env,
 				workspaceFolder: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "",
 			})) as typeof config
+
+			// Remove the placeholder and push the real connection
+			this.connections = this.connections.filter((c) => c !== placeholderConn)
+			const connection: ConnectedMcpConnection = {
+				type: "connected",
+				server: {
+					name,
+					config: JSON.stringify(configInjected),
+					status: "connecting",
+					disabled: configInjected.disabled,
+					source,
+					projectPath: source === "project" ? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath : undefined,
+					errorHistory: [],
+				},
+				client,
+				transport: null as any,
+			}
+			this.connections.push(connection)
+			this.log(`[McpHub] connectToServer: real connection pushed for ${name}, connections count=${this.connections.length}`)
+
+			await this.notifyWebviewOfServerChanges()
+
+			// Compute connect timeout early so SSE ReconnectingEventSource can use it
+			const connectTimeoutMs = (configInjected.timeout ?? 60) * 1000
 
 			if (configInjected.type === "stdio") {
 				// On Windows, wrap commands with cmd.exe to handle non-exe executables like npx.ps1
@@ -730,6 +685,7 @@ export class McpHub {
 					},
 					stderr: "pipe",
 				})
+				connection.transport = transport
 
 				// Set up stdio specific error handling
 				transport.onerror = async (error) => {
@@ -785,6 +741,7 @@ export class McpHub {
 						headers: configInjected.headers,
 					},
 				})
+				connection.transport = transport
 
 				// Set up Streamable HTTP specific error handling
 				transport.onerror = async (error) => {
@@ -813,8 +770,19 @@ export class McpHub {
 				}
 				// Configure ReconnectingEventSource options
 				const reconnectingEventSourceOptions = {
-					max_retry_time: 5000, // Maximum retry time in milliseconds
+					max_retry_time: connectTimeoutMs, // Match the connect timeout for retry duration
 					withCredentials: configInjected.headers?.["Authorization"] ? true : false, // Enable credentials if Authorization header exists
+					onopen: (event: Event) => {
+						// ReconnectingEventSource fires this when a connection is (re)established.
+						// Update the server status and clear any error so the UI reflects the
+						// actual connection state.
+						const connection = this.findConnection(name, source)
+						if (connection) {
+							connection.server.status = "connected"
+							connection.server.error = ""
+						}
+						this.notifyWebviewOfServerChanges()
+					},
 					fetch: (url: string | URL, init: RequestInit) => {
 						const headers = new Headers({ ...(init?.headers || {}), ...(configInjected.headers || {}) })
 						return fetch(url, {
@@ -828,14 +796,24 @@ export class McpHub {
 					...sseOptions,
 					eventSourceInit: reconnectingEventSourceOptions,
 				})
+				connection.transport = transport
 
 				// Set up SSE specific error handling
+				// ReconnectingEventSource handles reconnection automatically, so transient
+				// errors (502, 504, etc.) during reconnection should NOT set the server
+				// to "disconnected" or populate the error field.
+				//
+				// Note: SSEClientTransport does NOT support an "onopen" callback.
+				// Reconnection status updates are handled by client.connect() completing
+				// successfully. The onerror handler only clears stale error messages.
+				// The onclose handler only fires on permanent disconnection (after all
+				// ReconnectingEventSource retries are exhausted).
 				transport.onerror = async (error) => {
-					console.error(`Transport error for "${name}":`, error)
+					console.error(`Transport error for "${name}" (SSE, will auto-retry):`, error)
+					// Explicitly clear the error field so the UI doesn't show a transient error
 					const connection = this.findConnection(name, source)
 					if (connection) {
-						connection.server.status = "disconnected"
-						this.appendErrorMessage(connection, error instanceof Error ? error.message : `${error}`)
+						connection.server.error = ""
 					}
 					await this.notifyWebviewOfServerChanges()
 				}
@@ -857,32 +835,13 @@ export class McpHub {
 				transport.start = async () => {}
 			}
 
-			// Create a connected connection
-			const connection: ConnectedMcpConnection = {
-				type: "connected",
-				server: {
-					name,
-					config: JSON.stringify(configInjected),
-					status: "connecting",
-					disabled: configInjected.disabled,
-					source,
-					projectPath: source === "project" ? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath : undefined,
-					errorHistory: [],
-				},
-				client,
-				transport,
-			}
-			this.connections.push(connection)
-
 			// Connect with per-server configurable timeout
-			const connectTimeoutMs = (configInjected.timeout ?? 60) * 1000
 			const connectResult = await Promise.race([
 				client.connect(transport).then(() => "connected" as const),
 				new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), connectTimeoutMs)),
 			])
 
 			if (connectResult === "timeout") {
-				// Server unreachable or too slow — treat as disconnected, don't block other servers
 				const errorMsg = `Connection to MCP server "${name}" timed out after ${configInjected.timeout ?? 60}s`
 				console.warn(errorMsg)
 				connection.server.status = "disconnected"
@@ -891,23 +850,31 @@ export class McpHub {
 				return
 			}
 
+			// console.log(`[McpHub] connectToServer: ${name} connected successfully`)
 			connection.server.status = "connected"
 			connection.server.error = ""
 			connection.server.instructions = client.getInstructions()
 
-			// Initial fetch of tools and resources
 			connection.server.tools = await this.fetchToolsList(name, source)
 			connection.server.resources = await this.fetchResourcesList(name, source)
 			connection.server.resourceTemplates = await this.fetchResourceTemplatesList(name, source)
 		} catch (error) {
-			// Update status with error, but don't re-throw — a single failing
-			// MCP server should not block the rest of extension initialization
 			const connection = this.findConnection(name, source)
 			if (connection) {
-				connection.server.status = "disconnected"
-				this.appendErrorMessage(connection, error instanceof Error ? error.message : `${error}`)
+				const errorMsg = error instanceof Error ? error.message : `${error}`
+				// console.log(`[McpHub] connectToServer catch: name=${name}, type=${config.type}, errorMsg=${errorMsg.substring(0, 200)}`)
+				// For SSE with ReconnectingEventSource, transient HTTP errors (502, 504)
+				// during initial connection are expected to be resolved by auto-reconnection.
+				// Don't mark as disconnected or set the error field — let the transport's
+				// onclose handler handle permanent disconnection.
+				if (config.type === "sse" && /Non-200 status code/i.test(errorMsg)) {
+					// console.warn(`[McpHub] SSE transient error for "${name}" (will auto-retry): ${errorMsg}`)
+				} else {
+					connection.server.status = "disconnected"
+					this.appendErrorMessage(connection, errorMsg)
+				}
 			}
-			console.error(`[McpHub] Failed to connect to MCP server "${name}":`, error)
+			console.error(`Failed to connect to MCP server "${name}":`, error)
 		}
 	}
 
@@ -1002,7 +969,23 @@ export class McpHub {
 				return []
 			}
 
-			const response = await connection.client.request({ method: "tools/list" }, ListToolsResultSchema)
+			let response: z.infer<typeof ListToolsResultSchema> | null = null
+			try {
+				response = await connection.client.request({ method: "tools/list" }, ListToolsResultSchema)
+			} catch (firstError) {
+				console.warn(`[McpHub] First tools/list attempt failed for ${serverName}:`, firstError)
+				// Retry once after a short delay (SSE timing issues can cause incomplete results)
+				await delay(2000)
+				try {
+					response = await connection.client.request({ method: "tools/list" }, ListToolsResultSchema)
+				} catch (retryError) {
+					console.error(`[McpHub] Retry tools/list also failed for ${serverName}:`, retryError)
+					return []
+				}
+			}
+			if (!response) {
+				return []
+			}
 
 			// Determine the actual source of the server
 			const actualSource = connection.server.source || "global"
@@ -1127,9 +1110,12 @@ export class McpHub {
 		source: "global" | "project" = "global",
 		manageConnectingState: boolean = true,
 	): Promise<void> {
+		// console.log(`[McpHub] updateServerConnections: source=${source}, newServers keys=[${Object.keys(newServers).join(", ")}], manageConnectingState=${manageConnectingState}`)
+		this.log(`[McpHub] updateServerConnections: source=${source}, newServers keys=[${Object.keys(newServers).join(", ")}], manageConnectingState=${manageConnectingState}`)
 		if (manageConnectingState) {
 			this.isConnecting = true
 		}
+		try {
 		this.removeAllFileWatchers()
 		// Filter connections by source
 		const currentConnections = this.connections.filter(
@@ -1185,9 +1171,12 @@ export class McpHub {
 			}
 			// If server exists with same config, do nothing
 		}
+		this.log(`[McpHub] updateServerConnections complete: connections count=${this.connections.length}, names=[${this.connections.map(c => c.server.name).join(", ")}]`)
 		await this.notifyWebviewOfServerChanges()
-		if (manageConnectingState) {
-			this.isConnecting = false
+		} finally {
+			if (manageConnectingState) {
+				this.isConnecting = false
+			}
 		}
 	}
 
@@ -1269,11 +1258,11 @@ export class McpHub {
 
 	async restartConnection(serverName: string, source?: "global" | "project"): Promise<void> {
 		this.isConnecting = true
+		try {
 
 		// Check if MCP is globally enabled
 		const mcpEnabled = await this.isMcpEnabled()
 		if (!mcpEnabled) {
-			this.isConnecting = false
 			return
 		}
 
@@ -1306,7 +1295,9 @@ export class McpHub {
 		}
 
 		await this.notifyWebviewOfServerChanges()
-		this.isConnecting = false
+		} finally {
+			this.isConnecting = false
+		}
 	}
 
 	public async refreshAllConnections(): Promise<void> {
@@ -1334,30 +1325,6 @@ export class McpHub {
 		this.isConnecting = true
 
 		try {
-			const globalPath = await this.getMcpSettingsFilePath()
-			let globalServers: Record<string, any> = {}
-			try {
-				const globalContent = await fs.readFile(globalPath, "utf-8")
-				const globalConfig = JSON.parse(globalContent)
-				globalServers = globalConfig.mcpServers || {}
-				const globalServerNames = Object.keys(globalServers)
-			} catch (error) {
-				console.log("Error reading global MCP config:", error)
-			}
-
-			const projectPath = await this.getProjectMcpPath()
-			let projectServers: Record<string, any> = {}
-			if (projectPath) {
-				try {
-					const projectContent = await fs.readFile(projectPath, "utf-8")
-					const projectConfig = JSON.parse(projectContent)
-					projectServers = projectConfig.mcpServers || {}
-					const projectServerNames = Object.keys(projectServers)
-				} catch (error) {
-					console.log("Error reading project MCP config:", error)
-				}
-			}
-
 			// Clear all existing connections first
 			const existingConnections = [...this.connections]
 			for (const conn of existingConnections) {
@@ -1379,7 +1346,7 @@ export class McpHub {
 		}
 	}
 
-	private async notifyWebviewOfServerChanges(): Promise<void> {
+	public async notifyWebviewOfServerChanges(): Promise<void> {
 		// Get global server order from settings file
 		const settingsPath = await this.getMcpSettingsFilePath()
 		const content = await fs.readFile(settingsPath, "utf-8")
@@ -1421,10 +1388,11 @@ export class McpHub {
 		})
 
 		// Send sorted servers to webview
-		const targetProvider: ClineProvider | undefined = this.providerRef.deref()
+		const targetProvider: ClineProvider | undefined = this.provider
 
 		if (targetProvider) {
 			const serversToSend = sortedConnections.map((connection) => connection.server)
+			// console.log(`[McpHub] notifyWebview: sending ${serversToSend.length} servers to webview: ${serversToSend.map((s) => `${s.name}:${s.status}:${s.error ? s.error.substring(0, 50) : "none"}`).join(", ")}`)
 
 			const message = {
 				type: "mcpServers" as const,
@@ -1434,11 +1402,11 @@ export class McpHub {
 			try {
 				await targetProvider.postMessageToWebview(message)
 			} catch (error) {
-				console.error("[McpHub] Error calling targetProvider.postMessageToWebview:", error)
+				console.error("Error calling targetProvider.postMessageToWebview:", error)
 			}
 		} else {
 			console.error(
-				"[McpHub] No target provider available (neither from getInstance nor providerRef) - cannot send mcpServers message to webview",
+				"No target provider available (neither from getInstance nor providerRef) - cannot send mcpServers message to webview",
 			)
 		}
 	}
@@ -1625,6 +1593,14 @@ export class McpHub {
 		this.isProgrammaticUpdate = true
 		try {
 			await safeWriteJson(configPath, updatedConfig, { prettyPrint: true })
+
+			// Also save to GlobalConfig for global servers
+			if (source === "global") {
+				const provider = this.provider
+				if (provider) {
+					await provider.saveMcpServersToGlobalConfig(updatedConfig.mcpServers)
+				}
+			}
 		} finally {
 			// Reset flag after watcher debounce period (non-blocking)
 			this.flagResetTimer = setTimeout(() => {
@@ -1710,6 +1686,14 @@ export class McpHub {
 				}
 
 				await safeWriteJson(configPath, updatedConfig, { prettyPrint: true })
+
+				// Also save to GlobalConfig for global servers
+				if (serverSource === "global") {
+					const provider = this.provider
+					if (provider) {
+						await provider.saveMcpServersToGlobalConfig(updatedConfig.mcpServers)
+					}
+				}
 
 				// Update server connections with the correct source
 				await this.updateServerConnections(config.mcpServers, serverSource)
@@ -1861,6 +1845,14 @@ export class McpHub {
 		this.isProgrammaticUpdate = true
 		try {
 			await safeWriteJson(normalizedPath, config, { prettyPrint: true })
+
+			// Also save to GlobalConfig for global servers
+			if (source === "global") {
+				const provider = this.provider
+				if (provider) {
+					await provider.saveMcpServersToGlobalConfig(config.mcpServers)
+				}
+			}
 		} finally {
 			// Reset flag after watcher debounce period (non-blocking)
 			this.flagResetTimer = setTimeout(() => {

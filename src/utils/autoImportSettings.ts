@@ -8,6 +8,10 @@ import { t } from "../i18n"
 
 import { importSettingsFromPath, ImportOptions } from "../core/config/importExport"
 
+export interface AutoImportSettingsOptions extends ImportOptions {
+	onImportSuccess?: () => Promise<void>
+}
+
 /**
  * Automatically imports RooCode settings from a specified path if it exists.
  * This function is called during extension activation to allow users to pre-configure
@@ -15,7 +19,7 @@ import { importSettingsFromPath, ImportOptions } from "../core/config/importExpo
  */
 export async function autoImportSettings(
 	outputChannel: vscode.OutputChannel,
-	{ providerSettingsManager, contextProxy, customModesManager }: ImportOptions,
+	{ providerSettingsManager, contextProxy, customModesManager, onImportSuccess }: AutoImportSettingsOptions,
 ): Promise<void> {
 	try {
 		// Get the auto-import settings path from VSCode settings
@@ -45,6 +49,10 @@ export async function autoImportSettings(
 
 		if (result.success) {
 			outputChannel.appendLine(`[AutoImport] Successfully imported settings from ${resolvedPath}`)
+
+			if (onImportSuccess) {
+				await onImportSuccess()
+			}
 
 			// Show a notification to the user
 			vscode.window.showInformationMessage(

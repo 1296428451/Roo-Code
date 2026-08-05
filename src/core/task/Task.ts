@@ -3475,6 +3475,35 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 						// Add periodic yielding to prevent blocking
 						await new Promise((resolve) => setImmediate(resolve))
+					} else {
+						// No tool results were generated (model responded with plain text).
+						// Ask the user for follow-up input to keep the conversation going,
+						// instead of silently exiting the loop.
+						const { response, text, images } = await this.ask("followup", "", false)
+
+						if (response === "messageResponse" || response === "yesButtonClicked") {
+							if (text) {
+								await this.say("user_feedback", text, images)
+							}
+
+							const userMessageBlocks: Anthropic.Messages.ContentBlockParam[] = []
+
+							if (text) {
+								userMessageBlocks.push({
+									type: "text" as const,
+									text: `<user_message>\n${text}\n</user_message>`,
+								})
+							}
+
+							if (images) {
+								userMessageBlocks.push(...formatResponse.imageBlocks(images))
+							}
+
+							stack.push({
+								userContent: userMessageBlocks,
+								includeFileDetails: false,
+							})
+						}
 					}
 
 					continue
@@ -3664,6 +3693,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				},
 				undefined, // todoList
 				this.api.getModel().id,
+				provider?.getSkillsManager(),
 			)
 		})()
 
