@@ -519,7 +519,7 @@ export class ClineProvider
 		return this.mcpDelegate.getMcpHub()
 	}
 
-	getMcpServersFromGlobalConfig(): any[] {
+	getMcpServersFromGlobalConfig(): Record<string, any> {
 		return this.mcpDelegate.getMcpServersFromGlobalConfig()
 	}
 

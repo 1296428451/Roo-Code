@@ -6,8 +6,8 @@ export class McpDelegate {
 
 	async initializeMcpHub(): Promise<void> {
 		try {
-			this.provider.mcpHub = new McpHub(this.provider.context)
-			await this.provider.mcpHub.initialize()
+			this.provider.mcpHub = new McpHub(this.provider)
+			await this.provider.mcpHub.waitUntilReady()
 		} catch (error) {
 			this.provider.log(`Failed to initialize MCP Hub: ${error}`)
 		}
@@ -17,20 +17,13 @@ export class McpDelegate {
 		return this.provider.mcpHub
 	}
 
-	getMcpServersFromGlobalConfig(): any[] {
+	getMcpServersFromGlobalConfig(): Record<string, any> {
 		const stateValues = this.provider.contextProxy.getValues()
 		const globalConfigServers = stateValues.mcpServers
 		if (globalConfigServers && typeof globalConfigServers === "object" && !Array.isArray(globalConfigServers)) {
-			return Object.entries(globalConfigServers).map(([name, config]) => ({
-				name,
-				config: typeof config === "string" ? config : JSON.stringify(config),
-				status: "disconnected" as const,
-				source: "global" as const,
-				disabled: (config as any)?.disabled,
-				timeout: (config as any)?.timeout,
-			}))
+			return globalConfigServers
 		}
-		return []
+		return {}
 	}
 
 	getMcpEnabledFromGlobalConfig(): boolean {

@@ -117,7 +117,11 @@ export async function checkAutoApproval({
 		}
 
 		if (state.alwaysAllowExecute === true) {
-			const decision = getCommandDecision(text, state.allowedCommands || [], state.deniedCommands || [])
+			// When allowedCommands is empty, treat it as an implicit wildcard "*"
+			// so that checking the "Execute" checkbox alone auto-approves all commands,
+			// consistent with how Read/Write auto-approval works.
+			const allowedCommands = state.allowedCommands?.length ? state.allowedCommands : ["*"]
+			const decision = getCommandDecision(text, allowedCommands, state.deniedCommands || [])
 
 			if (decision === "auto_approve") {
 				return { decision: "approve" }
