@@ -8,8 +8,12 @@ import { handlePromptOperations } from "./promptHandlers"
 import { handleSearchOperations } from "./searchHandlers"
 import { handleWorktreeOperations } from "./worktreeHandlers"
 import { handleMcpOperations } from "./mcpHandlers"
+import { handleProviderOperations } from "./providerHandlers"
+import { handleModelOperations } from "./modelHandlers"
+import { handleCheckpointOperations } from "./checkpointHandlers"
 
-export type { HandlerContext } from "./taskHandlers"
+export { createHandlerContext } from "./context"
+export type { HandlerContext } from "./context"
 
 export {
 	handleTaskOperations,
@@ -23,4 +27,7 @@ export {
 	handleSearchOperations,
 	handleWorktreeOperations,
 	handleMcpOperations,
+	handleProviderOperations,
+	handleModelOperations,
+	handleCheckpointOperations,
 }
