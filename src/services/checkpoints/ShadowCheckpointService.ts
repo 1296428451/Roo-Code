@@ -163,10 +163,29 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			}
 
 			await this.writeExcludeFile()
+
+			const branchName = `roo-${this.taskId}`
+			const branches = await git.branchLocal()
+
+			if (branches.all.includes(branchName)) {
+				await git.checkout([branchName, "--force"])
+				this.log(`[${this.constructor.name}#initShadowGit] checked out existing branch ${branchName}`)
+
+				const log = await git.log()
+				this._checkpoints = log.all.slice(0, -1).reverse().map((c) => c.hash)
+			} else {
+				const defaultBranch = branches.all.includes("main") ? "main" : "master"
+				await git.checkout([defaultBranch, "--force"])
+				await git.checkoutLocalBranch(branchName)
+				this.log(`[${this.constructor.name}#initShadowGit] created new branch ${branchName} from ${defaultBranch}`)
+				created = true
+			}
+
 			this.baseHash = await git.revparse(["HEAD"])
 		} else {
 			this.log(`[${this.constructor.name}#initShadowGit] creating shadow git repo at ${this.checkpointsDir}`)
 			await git.init({ "--template": "" })
+			await this.removeStaleLockFile()
 			await git.addConfig("core.worktree", this.workspaceDir) // Sets the working tree to the current workspace.
 			await git.addConfig("commit.gpgSign", "false") // Disable commit signing for shadow repo.
 			await git.addConfig("user.name", "Roo Code")
@@ -210,12 +229,39 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		await fs.writeFile(path.join(this.dotGitDir, "info", "exclude"), patterns.join("\n"))
 	}
 
+	private async removeStaleLockFile() {
+		const lockFile = path.join(this.dotGitDir, "index.lock")
+
+		try {
+			if (await fileExistsAtPath(lockFile)) {
+				await fs.unlink(lockFile)
+				this.log(
+					`[${this.constructor.name}#removeStaleLockFile] removed stale index.lock from new shadow repo`,
+				)
+			}
+		} catch (error) {
+			this.log(
+				`[${this.constructor.name}#removeStaleLockFile] failed to remove stale lock file: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
+	}
+
 	private async stageAll(git: SimpleGit) {
 		try {
 			await git.add([".", "--ignore-errors"])
 		} catch (error) {
 			this.log(
 				`[${this.constructor.name}#stageAll] failed to add files to git: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
+	}
+
+	private async stageTracked(git: SimpleGit) {
+		try {
+			await git.add(["-u", "--ignore-errors"])
+		} catch (error) {
+			this.log(
+				`[${this.constructor.name}#stageTracked] failed to stage tracked files: ${error instanceof Error ? error.message : String(error)}`,
 			)
 		}
 	}
@@ -287,7 +333,7 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			}
 
 			const startTime = Date.now()
-			await this.stageAll(this.git)
+			await this.stageTracked(this.git)
 			const commitArgs = options?.allowEmpty ? { "--allow-empty": null } : undefined
 			const result = await this.git.commit(message, commitArgs)
 			const fromHash = this._checkpoints[this._checkpoints.length - 1] ?? this.baseHash!
@@ -422,10 +468,6 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 
 	public static hashWorkspaceDir(workspaceDir: string) {
 		return crypto.createHash("sha256").update(workspaceDir).digest("hex").toString().slice(0, 8)
-	}
-
-	protected static taskRepoDir({ taskId, globalStorageDir }: { taskId: string; globalStorageDir: string }) {
-		return path.join(globalStorageDir, "tasks", taskId, "checkpoints")
 	}
 
 	protected static workspaceRepoDir({

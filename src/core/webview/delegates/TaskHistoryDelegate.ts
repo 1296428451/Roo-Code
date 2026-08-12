@@ -42,7 +42,7 @@ export class TaskHistoryDelegate {
 		apiConversationHistory: Anthropic.MessageParam[]
 	}> {
 		const historyItem =
-			this.taskHistoryStore.get(id) ?? (this.provider.getGlobalState("taskHistory") ?? []).find((item) => item.id === id)
+			this.taskHistoryStore.get(id) ?? ((await this.provider.getGlobalState("taskHistory")) ?? []).find((item: HistoryItem) => item.id === id)
 
 		if (!historyItem) {
 			throw new Error("Task not found")
@@ -173,12 +173,14 @@ export class TaskHistoryDelegate {
 			const { getTaskDirectoryPath } = await import("../../../utils/storage")
 			const globalStoragePath = this.contextProxy.globalStorageUri.fsPath
 
+			const failedDeletions: string[] = []
+
 			for (const taskId of allIdsToDelete) {
 				try {
 					await ShadowCheckpointService.deleteTask({ taskId, globalStorageDir, workspaceDir })
 				} catch (error) {
 					console.error(
-						`[deleteTaskWithId${taskId}] failed to delete associated shadow repository or branch: ${error instanceof Error ? error.message : String(error)}`,
+						`[deleteTaskWithId${taskId}] failed to delete checkpoint branch: ${error instanceof Error ? error.message : String(error)}`,
 					)
 				}
 
@@ -187,13 +189,17 @@ export class TaskHistoryDelegate {
 					await fs.rm(dirPath, { recursive: true, force: true })
 					console.log(`[deleteTaskWithId${taskId}] removed task directory`)
 				} catch (error) {
-					console.error(
-						`[deleteTaskWithId${taskId}] failed to remove task directory: ${error instanceof Error ? error.message : String(error)}`,
-					)
+					const errMsg = `[deleteTaskWithId${taskId}] failed to remove task directory: ${error instanceof Error ? error.message : String(error)}`
+					console.error(errMsg)
+					failedDeletions.push(taskId)
 				}
 			}
 
 			await this.provider.postStateToWebview()
+
+			if (failedDeletions.length > 0) {
+				throw new Error(`Failed to delete task directories for: ${failedDeletions.join(", ")}`)
+			}
 		} catch (error) {
 			if (error instanceof Error && error.message === "Task not found") {
 				await this.deleteTaskFromState(id)
@@ -206,6 +212,29 @@ export class TaskHistoryDelegate {
 	async deleteTaskFromState(id: string) {
 		await this.taskHistoryStore.delete(id)
 		this.provider.recentTasksCache = undefined
+
+		const globalStorageDir = this.contextProxy.globalStorageUri.fsPath
+		const workspaceDir = this.cwd
+		const { getTaskDirectoryPath } = await import("../../../utils/storage")
+		const globalStoragePath = this.contextProxy.globalStorageUri.fsPath
+
+		try {
+			await ShadowCheckpointService.deleteTask({ taskId: id, globalStorageDir, workspaceDir })
+		} catch (error) {
+			console.error(
+				`[deleteTaskFromState${id}] failed to delete checkpoint branch: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
+
+		try {
+			const dirPath = await getTaskDirectoryPath(globalStoragePath, id)
+			await fs.rm(dirPath, { recursive: true, force: true })
+			console.log(`[deleteTaskFromState${id}] removed task directory`)
+		} catch (error) {
+			console.error(
+				`[deleteTaskFromState${id}] failed to remove task directory: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
 
 		await this.provider.postStateToWebview()
 	}
@@ -374,8 +403,9 @@ export class TaskHistoryDelegate {
 	}
 
 	async resetState() {
-		await this.provider.contextProxy.resetState()
-		await this.provider.taskHistoryStore.clear()
+		await this.provider.contextProxy.resetAllState()
+		this.provider.taskHistoryStore.invalidateAll()
+		await this.provider.taskHistoryStore.flushIndex()
 		this.provider.recentTasksCache = undefined
 		await this.provider.postStateToWebview()
 	}
