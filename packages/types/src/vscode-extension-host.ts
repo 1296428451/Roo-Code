@@ -345,6 +345,7 @@ export type ExtensionState = Pick<
 	 * (captured during async getStateToPostToWebview) from overwriting newer messages.
 	 */
 	clineMessagesSeq?: number
+	isPaused?: boolean
 }
 
 export interface Command {

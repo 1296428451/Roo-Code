@@ -82,6 +82,12 @@ export const CheckpointSaved = ({
 		return null
 	}
 
+	// For file snapshots, show tool/description info
+	const isFileSnapshot = metadata.isFileSnapshot === true
+	const snapshotLabel = isFileSnapshot && metadata.description
+		? metadata.description
+		: undefined
+
 	return (
 		<div
 			className="flex items-center justify-between gap-2 pt-2 pb-3"
@@ -91,6 +97,9 @@ export const CheckpointSaved = ({
 				<GitCommitVertical className="w-4" />
 				<span className="font-semibold">{t("chat:checkpoint.regular")}</span>
 				{isCurrent && <span className="text-muted">({t("chat:checkpoint.current")})</span>}
+				{snapshotLabel && (
+					<span className="text-muted text-xs truncate max-w-[300px]">{snapshotLabel}</span>
+				)}
 			</div>
 			<span
 				className="block w-full h-[2px] mt-[2px] text-xs"

@@ -18,6 +18,11 @@ export interface SkillMetadata {
 	 * - An array with one or more mode slugs restricts the skill to those modes.
 	 */
 	modeSlugs?: string[]
+	/**
+	 * Validation errors/warnings encountered during loading.
+	 * Non-empty means the skill was loaded but has issues.
+	 */
+	loadErrors?: string[]
 }
 
 /**

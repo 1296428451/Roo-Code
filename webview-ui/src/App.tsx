@@ -191,6 +191,9 @@ const App = () => {
 					hasCheckpoint={deleteMessageDialogState.hasCheckpoint}
 					onOpenChange={(open: boolean) => setDeleteMessageDialogState((prev) => ({ ...prev, isOpen: open }))}
 					onConfirm={(restoreCheckpoint: boolean) => {
+						if (restoreCheckpoint) {
+							window.dispatchEvent(new CustomEvent("checkpoint-restore"))
+						}
 						vscode.postMessage({
 							type: "deleteMessageConfirm",
 							messageTs: deleteMessageDialogState.messageTs,
@@ -219,6 +222,9 @@ const App = () => {
 					hasCheckpoint={editMessageDialogState.hasCheckpoint}
 					onOpenChange={(open: boolean) => setEditMessageDialogState((prev) => ({ ...prev, isOpen: open }))}
 					onConfirm={(restoreCheckpoint: boolean) => {
+						if (restoreCheckpoint) {
+							window.dispatchEvent(new CustomEvent("checkpoint-restore"))
+						}
 						vscode.postMessage({
 							type: "editMessageConfirm",
 							messageTs: editMessageDialogState.messageTs,

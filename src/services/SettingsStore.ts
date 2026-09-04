@@ -19,6 +19,8 @@ import {
 
 import { logger } from "../utils/logging"
 import { GlobalFileNames } from "../shared/globalFileNames"
+import { ensureIgnoreConfigExists, getDirsToIgnore } from "./glob/ignore-config"
+import { initIgnoreUtilsCache } from "./glob/ignore-utils"
 
 function encodeSecret(value: string): string {
 	return Buffer.from(value).toString("base64")
@@ -341,6 +343,13 @@ export class SettingsStore {
 
 	async loadAll(): Promise<void> {
 		await this.ensureDirectory()
+
+		// 初始化 ignore.json（如果不存在则创建默认值）
+		await ensureIgnoreConfigExists(this.settingsDir)
+
+		// 初始化 ignore-utils.ts 的同步缓存
+		const dirsToIgnore = await getDirsToIgnore(this.settingsDir)
+		initIgnoreUtilsCache(dirsToIgnore)
 
 		let config = await this.readConfig()
 		let configNeedsWrite = false

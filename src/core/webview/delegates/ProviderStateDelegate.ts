@@ -168,6 +168,7 @@ export class ProviderStateDelegate {
 			clineMessages: currentTask?.clineMessages || [],
 			currentTaskTodos: currentTask?.todoList || [],
 			messageQueue: currentTask?.messageQueueService?.messages,
+			isPaused: currentTask?.isPaused ?? false,
 			taskHistory: filteredTaskHistory,
 			soundEnabled: soundEnabled ?? false,
 			ttsEnabled: ttsEnabled ?? false,

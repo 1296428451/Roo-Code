@@ -143,6 +143,11 @@ export class ClineProvider
 		this.providerSettingsManager = new ProviderSettingsManager(this.context)
 		this.customModesManager = new CustomModesManager(this.context)
 
+		this.skillsManager = new SkillsManager(this)
+		this.skillsManager.initialize().catch((error) => {
+			this.log(`Failed to initialize skills manager: ${error}`)
+		})
+
 		this.mcpHubInitializationPromise = this.mcpDelegate.initializeMcpHub()
 
 		this.taskCreationCallback = (task: Task) => {

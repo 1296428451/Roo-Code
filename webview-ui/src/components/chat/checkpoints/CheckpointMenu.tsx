@@ -81,11 +81,15 @@ export const CheckpointMenu = ({
 	}, [ts, commitHash])
 
 	const onPreview = useCallback(() => {
+		// Signal scroll lifecycle to stop auto-following before messages change.
+		window.dispatchEvent(new CustomEvent("checkpoint-restore"))
 		vscode.postMessage({ type: "checkpointRestore", payload: { ts, commitHash, mode: "preview" } })
 		setRestoreOpen(false)
 	}, [ts, commitHash, setRestoreOpen])
 
 	const onRestore = useCallback(() => {
+		// Signal scroll lifecycle to stop auto-following before messages change.
+		window.dispatchEvent(new CustomEvent("checkpoint-restore"))
 		vscode.postMessage({ type: "checkpointRestore", payload: { ts, commitHash, mode: "restore" } })
 		setRestoreOpen(false)
 	}, [ts, commitHash, setRestoreOpen])

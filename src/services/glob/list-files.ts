@@ -6,7 +6,7 @@ import * as vscode from "vscode"
 import ignore from "ignore"
 import { arePathsEqual } from "../../utils/path"
 import { getBinPath } from "../../services/ripgrep"
-import { DIRS_TO_IGNORE } from "./constants"
+import { getDirsToIgnoreCached, DEFAULT_DIRS_TO_IGNORE } from "./ignore-config"
 
 /**
  * Context object for directory scanning operations
@@ -43,32 +43,35 @@ export async function listFiles(dirPath: string, recursive: boolean, limit: numb
 		return specialResult
 	}
 
+	// 获取排除目录配置（缓存版本，避免重复 I/O）
+	const dirsToIgnore = await getDirsToIgnoreCached("")
+
 	// Get ripgrep path
 	const rgPath = await getRipgrepPath()
 
 	if (!recursive) {
 		// For non-recursive, use the existing approach
-		const files = await listFilesWithRipgrep(rgPath, dirPath, false, limit)
+		const files = await listFilesWithRipgrep(rgPath, dirPath, false, limit, dirsToIgnore)
 		const ignoreInstance = await createIgnoreInstance(dirPath)
 		// Calculate remaining limit for directories
 		const remainingLimit = Math.max(0, limit - files.length)
-		const directories = await listFilteredDirectories(dirPath, false, ignoreInstance, remainingLimit)
+		const directories = await listFilteredDirectories(dirPath, false, ignoreInstance, remainingLimit, dirsToIgnore)
 		return formatAndCombineResults(files, directories, limit)
 	}
 
 	// For recursive mode, use the original approach but ensure first-level directories are included
-	const files = await listFilesWithRipgrep(rgPath, dirPath, true, limit)
+	const files = await listFilesWithRipgrep(rgPath, dirPath, true, limit, dirsToIgnore)
 	const ignoreInstance = await createIgnoreInstance(dirPath)
 	// Calculate remaining limit for directories
 	const remainingLimit = Math.max(0, limit - files.length)
-	const directories = await listFilteredDirectories(dirPath, true, ignoreInstance, remainingLimit)
+	const directories = await listFilteredDirectories(dirPath, true, ignoreInstance, remainingLimit, dirsToIgnore)
 
 	// Combine and check if we hit the limits
 	const [results, limitReached] = formatAndCombineResults(files, directories, limit)
 
 	// If we hit the limit, ensure all first-level directories are included
 	if (limitReached) {
-		const firstLevelDirs = await getFirstLevelDirectories(dirPath, ignoreInstance)
+		const firstLevelDirs = await getFirstLevelDirectories(dirPath, ignoreInstance, dirsToIgnore)
 		return ensureFirstLevelDirectoriesIncluded(results, firstLevelDirs, limit)
 	}
 
@@ -78,7 +81,7 @@ export async function listFiles(dirPath: string, recursive: boolean, limit: numb
 /**
  * Get only the first-level directories in a path
  */
-async function getFirstLevelDirectories(dirPath: string, ignoreInstance: ReturnType<typeof ignore>): Promise<string[]> {
+async function getFirstLevelDirectories(dirPath: string, ignoreInstance: ReturnType<typeof ignore>, dirsToIgnore: string[]): Promise<string[]> {
 	const absolutePath = path.resolve(dirPath)
 	const directories: string[] = []
 
@@ -94,7 +97,7 @@ async function getFirstLevelDirectories(dirPath: string, ignoreInstance: ReturnT
 					basePath: dirPath,
 					ignoreInstance,
 				}
-				if (shouldIncludeDirectory(entry.name, fullDirPath, context)) {
+				if (shouldIncludeDirectory(entry.name, fullDirPath, context, dirsToIgnore)) {
 					const formattedPath = fullDirPath.endsWith("/") ? fullDirPath : `${fullDirPath}/`
 					directories.push(formattedPath)
 				}
@@ -202,8 +205,9 @@ async function listFilesWithRipgrep(
 	dirPath: string,
 	recursive: boolean,
 	limit: number,
+	dirsToIgnore: string[],
 ): Promise<string[]> {
-	const rgArgs = buildRipgrepArgs(dirPath, recursive)
+	const rgArgs = buildRipgrepArgs(dirPath, recursive, dirsToIgnore)
 
 	const relativePaths = await execRipgrep(rgPath, rgArgs, limit)
 
@@ -216,21 +220,21 @@ async function listFilesWithRipgrep(
 /**
  * Build appropriate ripgrep arguments based on whether we're doing a recursive search
  */
-function buildRipgrepArgs(dirPath: string, recursive: boolean): string[] {
+function buildRipgrepArgs(dirPath: string, recursive: boolean, dirsToIgnore: string[]): string[] {
 	// Base arguments to list files
 	const args = ["--files", "--hidden", "--follow"]
 
 	if (recursive) {
-		return [...args, ...buildRecursiveArgs(dirPath), dirPath]
+		return [...args, ...buildRecursiveArgs(dirPath, dirsToIgnore), dirPath]
 	} else {
-		return [...args, ...buildNonRecursiveArgs(), dirPath]
+		return [...args, ...buildNonRecursiveArgs(dirsToIgnore), dirPath]
 	}
 }
 
 /**
  * Build ripgrep arguments for recursive directory traversal
  */
-function buildRecursiveArgs(dirPath: string): string[] {
+function buildRecursiveArgs(dirPath: string, dirsToIgnore: string[]): string[] {
 	const args: string[] = []
 
 	// In recursive mode, respect .gitignore by default
@@ -246,7 +250,7 @@ function buildRecursiveArgs(dirPath: string): string[] {
 
 	// Get the target directory name to check if it's in the ignore list
 	const targetDirName = path.basename(dirPath)
-	const isTargetInIgnoreList = DIRS_TO_IGNORE.includes(targetDirName)
+	const isTargetInIgnoreList = dirsToIgnore.includes(targetDirName)
 
 	// If targeting a hidden directory or a directory in the ignore list,
 	// use special handling to ensure all files are shown
@@ -261,7 +265,7 @@ function buildRecursiveArgs(dirPath: string): string[] {
 	}
 
 	// Apply directory exclusions for recursive searches
-	for (const dir of DIRS_TO_IGNORE) {
+	for (const dir of dirsToIgnore) {
 		// Special handling for hidden directories pattern
 		if (dir === ".*") {
 			// If we're explicitly targeting a hidden directory, don't exclude hidden files/dirs
@@ -295,7 +299,7 @@ function buildRecursiveArgs(dirPath: string): string[] {
 /**
  * Build ripgrep arguments for non-recursive directory listing
  */
-function buildNonRecursiveArgs(): string[] {
+function buildNonRecursiveArgs(dirsToIgnore: string[]): string[] {
 	const args: string[] = []
 
 	// For non-recursive, limit to the current directory level
@@ -306,7 +310,7 @@ function buildNonRecursiveArgs(): string[] {
 	// (ripgrep respects .gitignore by default)
 
 	// Apply directory exclusions for non-recursive searches
-	for (const dir of DIRS_TO_IGNORE) {
+	for (const dir of dirsToIgnore) {
 		if (dir === ".*") {
 			// For hidden directories in non-recursive mode, we want to show the directories
 			// themselves but not their contents. Since we're using --maxdepth 1, this
@@ -389,6 +393,7 @@ async function listFilteredDirectories(
 	recursive: boolean,
 	ignoreInstance: ReturnType<typeof ignore>,
 	limit?: number,
+	dirsToIgnore: string[] = DEFAULT_DIRS_TO_IGNORE,
 ): Promise<string[]> {
 	const absolutePath = path.resolve(dirPath)
 	const directories: string[] = []
@@ -437,7 +442,7 @@ async function listFilteredDirectories(
 					}
 
 					// Check if this directory should be included
-					if (shouldIncludeDirectory(dirName, fullDirPath, subdirContext)) {
+					if (shouldIncludeDirectory(dirName, fullDirPath, subdirContext, dirsToIgnore)) {
 						// Add the directory to our results (with trailing slash)
 						// fullDirPath is already absolute since it's built with path.join from absolutePath
 						const formattedPath = fullDirPath.endsWith("/") ? fullDirPath : `${fullDirPath}/`
@@ -462,7 +467,7 @@ async function listFilteredDirectories(
 						// Only apply the most critical ignore patterns when inside explicit hidden target
 						shouldRecurseIntoDir = !CRITICAL_IGNORE_PATTERNS.has(dirName)
 					} else {
-						shouldRecurseIntoDir = !isDirectoryExplicitlyIgnored(dirName)
+						shouldRecurseIntoDir = !isDirectoryExplicitlyIgnored(dirName, dirsToIgnore)
 					}
 
 					const shouldRecurse =
@@ -470,7 +475,7 @@ async function listFilteredDirectories(
 						shouldRecurseIntoDir &&
 						!(
 							isHiddenDir &&
-							DIRS_TO_IGNORE.includes(".*") &&
+							dirsToIgnore.includes(".*") &&
 							!context.isTargetDir &&
 							!context.insideExplicitHiddenTarget
 						)
@@ -538,9 +543,9 @@ function isIgnoredByGitignore(
 /**
  * Check if a target directory should be included
  */
-function shouldIncludeTargetDirectory(dirName: string): boolean {
+function shouldIncludeTargetDirectory(dirName: string, dirsToIgnore: string[]): boolean {
 	// Only apply non-hidden-directory ignore rules to target directories
-	const nonHiddenIgnorePatterns = DIRS_TO_IGNORE.filter((pattern) => pattern !== ".*")
+	const nonHiddenIgnorePatterns = dirsToIgnore.filter((pattern) => pattern !== ".*")
 	return !matchesIgnorePattern(dirName, nonHiddenIgnorePatterns)
 }
 
@@ -560,9 +565,9 @@ function shouldIncludeInsideHiddenTarget(dirName: string, fullDirPath: string, c
 /**
  * Check if a regular directory should be included
  */
-function shouldIncludeRegularDirectory(dirName: string, fullDirPath: string, context: ScanContext): boolean {
+function shouldIncludeRegularDirectory(dirName: string, fullDirPath: string, context: ScanContext, dirsToIgnore: string[]): boolean {
 	// Check against explicit ignore patterns (excluding the ".*" pattern)
-	const nonHiddenIgnorePatterns = DIRS_TO_IGNORE.filter((pattern) => pattern !== ".*")
+	const nonHiddenIgnorePatterns = dirsToIgnore.filter((pattern) => pattern !== ".*")
 	if (matchesIgnorePattern(dirName, nonHiddenIgnorePatterns)) {
 		return false
 	}
@@ -574,11 +579,11 @@ function shouldIncludeRegularDirectory(dirName: string, fullDirPath: string, con
 /**
  * Determine if a directory should be included in results based on filters
  */
-function shouldIncludeDirectory(dirName: string, fullDirPath: string, context: ScanContext): boolean {
+function shouldIncludeDirectory(dirName: string, fullDirPath: string, context: ScanContext, dirsToIgnore: string[]): boolean {
 	// If this is the explicitly targeted directory, allow it even if it's hidden
 	// This preserves the ability to explicitly target hidden directories like .roo-memory
 	if (context.isTargetDir) {
-		return shouldIncludeTargetDirectory(dirName)
+		return shouldIncludeTargetDirectory(dirName, dirsToIgnore)
 	}
 
 	// If we're inside an explicitly targeted hidden directory, allow subdirectories
@@ -588,14 +593,14 @@ function shouldIncludeDirectory(dirName: string, fullDirPath: string, context: S
 	}
 
 	// Regular directory inclusion logic
-	return shouldIncludeRegularDirectory(dirName, fullDirPath, context)
+	return shouldIncludeRegularDirectory(dirName, fullDirPath, context, dirsToIgnore)
 }
 
 /**
  * Check if a directory is in our explicit ignore list
  */
-function isDirectoryExplicitlyIgnored(dirName: string): boolean {
-	for (const pattern of DIRS_TO_IGNORE) {
+function isDirectoryExplicitlyIgnored(dirName: string, dirsToIgnore: string[]): boolean {
+	for (const pattern of dirsToIgnore) {
 		// Exact name matching
 		if (pattern === dirName) {
 			return true

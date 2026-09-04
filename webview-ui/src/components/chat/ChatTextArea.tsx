@@ -488,7 +488,11 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 				// Handle Enter key based on enterBehavior setting
 				if (event.key === "Enter" && !isComposing) {
-					if (enterBehavior === "newline") {
+					if (isEditMode) {
+						// In edit mode, Enter always triggers send regardless of enterBehavior setting
+						event.preventDefault()
+						onSend()
+					} else if (enterBehavior === "newline") {
 						// New behavior: Enter = newline, Shift+Enter or Ctrl+Enter = send
 						if (event.shiftKey || event.ctrlKey || event.metaKey) {
 							event.preventDefault()

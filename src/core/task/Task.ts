@@ -55,7 +55,7 @@ import {
 
 // api
 import { ApiHandler, ApiHandlerCreateMessageMetadata, buildApiHandler } from "../../api"
-import { ApiStream, GroundingSource } from "../../api/transform/stream"
+import { ApiStream, ApiStreamChunk, GroundingSource } from "../../api/transform/stream"
 import { maybeRemoveImageBlocks } from "../../api/transform/image-cleaning"
 
 // shared
@@ -73,7 +73,7 @@ import { GlobalFileNames } from "../../shared/globalFileNames"
 // services
 import { McpHub } from "../../services/mcp/McpHub"
 import { McpServerManager } from "../../services/mcp/McpServerManager"
-import { RepoPerTaskCheckpointService } from "../../services/checkpoints"
+import { RepoPerTaskCheckpointService, FileSnapshotService } from "../../services/checkpoints"
 
 // integrations
 import { DiffViewProvider } from "../../integrations/editor/DiffViewProvider"
@@ -327,6 +327,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	checkpointTimeout: number
 	checkpointService?: RepoPerTaskCheckpointService
 	checkpointServiceInitializing = false
+	fileSnapshotService?: FileSnapshotService
 
 	// Message Queue Service
 	public readonly messageQueueService: MessageQueueService
@@ -2428,6 +2429,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// Kicks off the checkpoints initialization process in the background.
 		getCheckpointService(this)
 
+		// Initialize file snapshot service alongside checkpoints
+		this.initFileSnapshotService()
+
 		let nextUserContent = userContent
 		const provider = this.providerRef.deref()
 		const state = provider ? await provider.getState() : undefined
@@ -2724,27 +2728,46 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				try {
 					const iterator = stream[Symbol.asyncIterator]()
 
-					// Helper to race iterator.next() with abort signal
+					// Helper to race iterator.next() with abort signal and streaming idle timeout
+					const STREAMING_IDLE_TIMEOUT_MS = 30_000 // 30s without any new chunk = network stall
 					const nextChunkWithAbort = async () => {
 						const nextPromise = iterator.next()
 
-						// If we have an abort controller, race it with the next chunk
+						// Build a list of racers: next chunk + idle timeout (+ abort if controller exists)
+						const racers: Promise<IteratorResult<ApiStreamChunk> | never>[] = [nextPromise]
+
+						// Idle timeout: if no chunk arrives within 30s, assume the network stalled
+						let idleTimer: ReturnType<typeof setTimeout> | undefined
+						racers.push(
+							new Promise<never>((_, reject) => {
+								idleTimer = setTimeout(
+									() => reject(new Error("Streaming idle timeout (30s without data)")),
+									STREAMING_IDLE_TIMEOUT_MS,
+								)
+							}),
+						)
+
+						// If we have an abort controller, race it too
 						if (this.currentRequestAbortController) {
-							const abortPromise = new Promise<never>((_, reject) => {
-								const signal = this.currentRequestAbortController!.signal
-								if (signal.aborted) {
-									reject(new Error("Request cancelled by user"))
-								} else {
+							const signal = this.currentRequestAbortController!.signal
+							if (signal.aborted) {
+								if (idleTimer) clearTimeout(idleTimer)
+								throw new Error("Request cancelled by user")
+							}
+							racers.push(
+								new Promise<never>((_, reject) => {
 									signal.addEventListener("abort", () => {
 										reject(new Error("Request cancelled by user"))
 									})
-								}
-							})
-							return await Promise.race([nextPromise, abortPromise])
+								}),
+							)
 						}
 
-						// No abort controller, just return the next chunk normally
-						return await nextPromise
+						try {
+							return await Promise.race(racers)
+						} finally {
+							if (idleTimer) clearTimeout(idleTimer)
+						}
 					}
 
 					let item = await nextChunkWithAbort()
@@ -3136,6 +3159,25 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					// Cline instance to finish aborting (error is thrown here when
 					// any function in the for loop throws due to this.abort).
 					if (!this.abandoned) {
+						// Check if this is a pause (not an abort or streaming failure)
+						if (this.isPaused) {
+							// Clean up partial state without retry or abort
+							await abortStream("user_cancelled")
+							// Wait for resume
+							await pWaitFor(() => !this.isPaused || this.abort, { interval: 200 })
+							// If user chose to abort during pause, fall through to normal abort path
+							if (this.abort) {
+								this.abortReason = "user_cancelled"
+								await this.abortTask()
+								break
+							}
+							// After resume, re-push current content to retry the request
+							stack.push({
+								userContent: currentUserContent,
+								includeFileDetails: false,
+							})
+							continue
+						}
 						// Determine cancellation reason
 						const cancelReason: ClineApiReqCancelReason = this.abort ? "user_cancelled" : "streaming_failed"
 
@@ -4197,6 +4239,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		} catch (error) {
 			this.isWaitingForFirstChunk = false
 			this.currentRequestAbortController = undefined
+				// If paused, propagate error to recursivelyMakeClineRequests catch block
+				// which handles the pause/resume flow (don't retry or ask api_req_failed)
+				if (this.isPaused) {
+					throw error
+				}
 			const isContextWindowExceededError = checkContextWindowExceededError(error)
 
 			// If it's a context window error and we haven't exceeded max retries for this error type
@@ -4340,6 +4387,98 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	public async checkpointSave(force: boolean = false, suppressMessage: boolean = false) {
 		return checkpointSave(this, force, suppressMessage)
+	}
+
+	// --- File Snapshot Service ---
+
+	/**
+	 * Initialize the FileSnapshotService for this task.
+	 * Called once at task start; safe to call multiple times.
+	 */
+	private async initFileSnapshotService(): Promise<void> {
+		if (this.fileSnapshotService) return
+
+		try {
+			const taskDir = await getTaskDirectoryPath(this.globalStoragePath, this.taskId)
+			this.fileSnapshotService = new FileSnapshotService(
+				this.taskId,
+				taskDir,
+				this.cwd,
+				(msg) => console.log(msg),
+			)
+			await this.fileSnapshotService.init()
+		} catch (err) {
+			console.error("[Task] Failed to init FileSnapshotService:", err)
+		}
+	}
+
+	/**
+	 * Save a file snapshot before a write operation.
+	 * Called by write tools (write_to_file, apply_diff, apply_patch, etc.)
+	 * before modifying files.
+	 */
+	public async saveFileSnapshot(
+		files: Array<{ relativePath: string; content?: string }>,
+		tool: string,
+		description?: string,
+	) {
+		if (!this.fileSnapshotService) {
+			await this.initFileSnapshotService()
+		}
+		const entry = await this.fileSnapshotService?.saveSnapshot(files, tool, description)
+
+		// Emit checkpoint_saved message so UI shows the snapshot in the timeline
+		if (entry) {
+			const provider = this.providerRef.deref()
+			provider?.postMessageToWebview({
+				type: "currentCheckpointUpdated",
+				text: entry.id,
+				suppressMessage: false,
+			})
+
+			await this.say(
+				"checkpoint_saved",
+				entry.id,
+				undefined,
+				undefined,
+				{ from: "", to: entry.id, suppressMessage: false, isFileSnapshot: true, files: entry.meta.files, tool: entry.meta.tool, description: entry.meta.description },
+				undefined,
+				{ isNonInteractive: true },
+			).catch((err) => {
+				console.error("[Task#saveFileSnapshot] failed to emit checkpoint_saved", err)
+			})
+		}
+
+		return entry
+	}
+
+	/**
+	 * Get all file snapshots for UI display.
+	 */
+	public getFileSnapshots() {
+		return this.fileSnapshotService?.getSnapshots() ?? []
+	}
+
+	/**
+	 * Restore files to a given snapshot.
+	 */
+	public async restoreFileSnapshot(snapshotId: string) {
+		if (!this.fileSnapshotService) {
+			throw new Error("FileSnapshotService not initialized")
+		}
+		return this.fileSnapshotService.restoreSnapshot(snapshotId)
+	}
+
+	/**
+	 * Get diff between two snapshot states (or snapshot vs current workspace).
+	 * @param fromId - Snapshot ID to diff from (undefined = first snapshot)
+	 * @param toId   - Snapshot ID to diff to (undefined = current workspace state)
+	 */
+	public async getSnapshotDiff(fromId?: string, toId?: string) {
+		if (!this.fileSnapshotService) {
+			await this.initFileSnapshotService()
+		}
+		return this.fileSnapshotService?.getDiff({ from: fromId, to: toId }) ?? []
 	}
 
 	private buildCleanConversationHistory(

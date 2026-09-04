@@ -49,7 +49,6 @@ export const handleTaskOperations = async (ctx: HandlerContext, message: any): P
 					resolved.images,
 					undefined,
 					{ taskId: message.taskId },
-					message.taskConfiguration,
 				)
 				await provider.postMessageToWebview({ type: "invoke", invoke: "newChat" })
 			} catch (error) {
@@ -100,6 +99,7 @@ export const handleTaskOperations = async (ctx: HandlerContext, message: any): P
 				if (currentTask) {
 					currentTask.isPaused = true
 					currentTask.cancelCurrentRequest()
+					await provider.postStateToWebview()
 				}
 			} catch (error) {
 				vscode.window.showErrorMessage(t("common:errors.pause_task"))
@@ -113,6 +113,7 @@ export const handleTaskOperations = async (ctx: HandlerContext, message: any): P
 				if (currentTask) {
 					currentTask.isPaused = false
 					provider.resumeTask(currentTask.taskId)
+					await provider.postStateToWebview()
 				}
 			} catch (error) {
 				vscode.window.showErrorMessage(t("common:errors.resume_task"))
@@ -463,6 +464,29 @@ export const handleChatOperations = async (ctx: HandlerContext, message: any): P
 					text,
 					hasCheckpoint,
 					images: message.images,
+				})
+			}
+			break
+		}
+
+		case "submitEditedMessage": {
+			// Frontend edit mode submission: convert to editMessage flow
+			const editedMessageContent = message.editedMessageContent ?? ""
+			const images = message.images ?? []
+			const resolved = await resolveIncomingImages(ctx, { text: editedMessageContent, images })
+
+			const currentCline = provider.getCurrentTask()
+			const messageTs = message.value
+			if (messageTs !== undefined && resolved.text !== undefined && currentCline) {
+				const hasCheckpoint = currentCline.clineMessages.some(
+					(msg: any) => msg.say === "checkpoint_saved" && msg.ts < messageTs,
+				)
+				await provider.postMessageToWebview({
+					type: "showEditMessageDialog",
+					messageTs,
+					text: resolved.text,
+					hasCheckpoint,
+					images: resolved.images,
 				})
 			}
 			break

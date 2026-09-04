@@ -16,13 +16,16 @@ export async function handleRequestSkills(provider: ClineProvider): Promise<Skil
 		const skillsManager = provider.getSkillsManager()
 		if (skillsManager) {
 			const skills = skillsManager.getSkillsMetadata()
+			console.log(`[SkillsMessageHandler] handleRequestSkills: returning ${skills.length} skills`, skills.map((s) => s.name))
 			await provider.postMessageToWebview({ type: "skills", skills })
 			return skills
 		} else {
+			console.log(`[SkillsMessageHandler] handleRequestSkills: skillsManager is undefined!`)
 			await provider.postMessageToWebview({ type: "skills", skills: [] })
 			return []
 		}
 	} catch (error) {
+		console.error(`[SkillsMessageHandler] Error fetching skills:`, error)
 		provider.log(`Error fetching skills: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`)
 		await provider.postMessageToWebview({ type: "skills", skills: [] })
 		return []

@@ -171,6 +171,13 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 					return
 				}
 
+				// Save file snapshot before writing
+				await task.saveFileSnapshot(
+					[{ relativePath: relPath, content: originalContent }],
+					"apply_diff",
+					`Apply diff to: ${relPath}`,
+				)
+
 				// Save directly without showing diff view or opening the file
 				task.diffViewProvider.editType = "modify"
 				task.diffViewProvider.originalContent = originalContent
@@ -217,6 +224,13 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 					task.processQueuedMessages()
 					return
 				}
+
+				// Save file snapshot before writing
+				await task.saveFileSnapshot(
+					[{ relativePath: relPath, content: originalContent }],
+					"apply_diff",
+					`Apply diff to: ${relPath}`,
+				)
 
 				// Call saveChanges to update the DiffViewProvider properties
 				await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)

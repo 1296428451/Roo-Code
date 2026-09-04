@@ -1,5 +1,6 @@
 import type { WebviewMessage } from "@roo-code/types"
 import type { HandlerContext } from "./context"
+import { checkpointDiff } from "../../checkpoints"
 
 export async function handleCheckpointOperations(ctx: HandlerContext, message: WebviewMessage): Promise<void> {
 	const { provider } = ctx
@@ -13,7 +14,20 @@ export async function handleCheckpointOperations(ctx: HandlerContext, message: W
 					commitHash: string
 					mode: "preview" | "restore"
 				}
-				await currentTask.checkpointRestore({ ts, commitHash, mode })
+
+				// File snapshot system: commitHash is actually a snapshotId
+				const snapshots = currentTask.getFileSnapshots()
+				const snapshot = snapshots.find(s => s.id === commitHash || s.meta.timestamp === ts)
+
+				if (snapshot) {
+					// 1. Restore file contents from snapshot
+					await currentTask.restoreFileSnapshot(snapshot.id)
+					// 2. Rewind message history + cancel task (same as legacy checkpoint restore)
+					await currentTask.checkpointRestore({ ts, commitHash, mode })
+				} else {
+					// Legacy git checkpoint fallback (disabled, will no-op)
+					await currentTask.checkpointRestore({ ts, commitHash, mode })
+				}
 			}
 			break
 		}
@@ -22,12 +36,14 @@ export async function handleCheckpointOperations(ctx: HandlerContext, message: W
 			const currentTask = provider.getCurrentTask()
 			if (currentTask && message.payload) {
 				const { ts, previousCommitHash, commitHash, mode } = message.payload as {
-					ts?: number
+					ts: number
 					previousCommitHash?: string
 					commitHash: string
 					mode: "from-init" | "checkpoint" | "to-current" | "full"
 				}
-				await currentTask.checkpointDiff({ ts, previousCommitHash, commitHash, mode })
+
+				// File snapshot diff: compute changes between snapshot states
+				await checkpointDiff(currentTask, { ts, previousCommitHash, commitHash, mode })
 			}
 			break
 		}

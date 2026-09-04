@@ -210,6 +210,13 @@ export class EditTool extends BaseTool<"edit"> {
 			}
 
 			// Save the changes
+			// Save file snapshot before writing
+			await task.saveFileSnapshot(
+				[{ relativePath: relPath, content: fileContent }],
+				"edit",
+				`Edit: ${relPath}`,
+			)
+
 			if (isPreventFocusDisruptionEnabled) {
 				// Direct file write without diff view or opening the file
 				await task.diffViewProvider.saveDirectly(relPath, newContent, false, diagnosticsEnabled, writeDelayMs)

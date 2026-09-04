@@ -83,6 +83,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		soundVolume,
 		messageQueue = [],
 		showWorktreesInHomeScreen,
+		isPaused,
 	} = useExtensionState()
 
 	// Show a WarningRow when the user sends a message with a retired provider.
@@ -685,7 +686,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 
 	// Handle stop button click from textarea
 	const handleStopTask = useCallback(() => {
-		vscode.postMessage({ type: "cancelTask" })
+		vscode.postMessage({ type: "pauseTask" })
 		setDidClickCancel(true)
 	}, [setDidClickCancel])
 
@@ -788,7 +789,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			const trimmedInput = text?.trim()
 
 			if (isStreaming) {
-				vscode.postMessage({ type: "cancelTask" })
+				vscode.postMessage({ type: "pauseTask" })
 				setDidClickCancel(true)
 				return
 			}
@@ -1545,7 +1546,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		vscode.postMessage({ type: "condenseTaskContextRequest", text: taskId })
 	}
 
-	const areButtonsVisible = showScrollToBottom || primaryButtonText || secondaryButtonText
+	const areButtonsVisible = showScrollToBottom || primaryButtonText || secondaryButtonText || isPaused
 
 	return (
 		<div
@@ -1670,6 +1671,30 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 								</>
 							) : (
 								<>
+									{isPaused && (
+										<>
+											<StandardTooltip content={t("chat:resumeTask.tooltip")}>
+												<Button
+													variant={"primary"}
+													className={"flex-1 mr-[6px]"}
+													onClick={() => {
+														vscode.postMessage({ type: "resumeTask" })
+													}}>
+													{t("chat:resumeTask.title")}
+												</Button>
+											</StandardTooltip>
+											<StandardTooltip content={t("chat:terminate.tooltip")}>
+												<Button
+													variant={"secondary"}
+													className={"flex-1 ml-[6px]"}
+													onClick={() => {
+														vscode.postMessage({ type: "cancelTask" })
+													}}>
+													{t("chat:terminate.title")}
+												</Button>
+											</StandardTooltip>
+										</>
+									)}
 									{primaryButtonText && (
 										<StandardTooltip
 											content={
@@ -1765,7 +1790,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				ref={textAreaRef}
 				inputValue={inputValue}
 				setInputValue={setInputValue}
-				sendingDisabled={sendingDisabled || isProfileDisabled}
+				sendingDisabled={sendingDisabled || isProfileDisabled || !!isPaused}
 				selectApiConfigDisabled={sendingDisabled && clineAsk !== "api_req_failed"}
 				placeholderText={placeholderText}
 				selectedImages={selectedImages}

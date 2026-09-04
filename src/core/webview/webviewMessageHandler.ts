@@ -65,6 +65,7 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 		case "editMessage":
 		case "deleteMessageConfirm":
 		case "editMessageConfirm":
+		case "submitEditedMessage":
 		case "queueMessage":
 		case "removeQueuedMessage":
 		case "editQueuedMessage":

@@ -191,7 +191,7 @@ const getLfsPatterns = async (workspacePath: string) => {
 			return (await fs.readFile(attributesPath, "utf8"))
 				.split("\n")
 				.filter((line) => line.includes("filter=lfs"))
-				.map((line) => line.split(" ")[0].trim())
+				.map((line) => line.split(" ")[0]?.trim() ?? "")
 		}
 	} catch (error) {}
 

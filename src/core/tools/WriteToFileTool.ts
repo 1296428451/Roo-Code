@@ -133,6 +133,13 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 					return
 				}
 
+				// Save file snapshot before writing
+				await task.saveFileSnapshot(
+					[{ relativePath: relPath, content: task.diffViewProvider.originalContent || undefined }],
+					"write_to_file",
+					fileExists ? `Write to existing file: ${relPath}` : `Create new file: ${relPath}`,
+				)
+
 				await task.diffViewProvider.saveDirectly(relPath, newContent, false, diagnosticsEnabled, writeDelayMs)
 			} else {
 				if (!task.diffViewProvider.isEditing) {
@@ -165,6 +172,13 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 					await task.diffViewProvider.revertChanges()
 					return
 				}
+
+				// Save file snapshot before writing
+				await task.saveFileSnapshot(
+					[{ relativePath: relPath, content: task.diffViewProvider.originalContent || undefined }],
+					"write_to_file",
+					fileExists ? `Write to existing file: ${relPath}` : `Create new file: ${relPath}`,
+				)
 
 				await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
 			}

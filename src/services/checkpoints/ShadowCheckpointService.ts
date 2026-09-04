@@ -5,13 +5,10 @@ import crypto from "crypto"
 import EventEmitter from "events"
 
 import simpleGit, { SimpleGit, SimpleGitOptions } from "simple-git"
-import pWaitFor from "p-wait-for"
-import * as vscode from "vscode"
 
 import { fileExistsAtPath } from "../../utils/fs"
 import { arePathsEqual } from "../../utils/path"
 import { executeRipgrep } from "../../services/search/file-search"
-import { t } from "../../i18n"
 
 import { CheckpointDiff, CheckpointResult, CheckpointEventMap } from "./types"
 import { getExcludePatterns } from "./excludes"
@@ -175,8 +172,16 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 				this._checkpoints = log.all.slice(0, -1).reverse().map((c) => c.hash)
 			} else {
 				const defaultBranch = branches.all.includes("main") ? "main" : "master"
-				await git.checkout([defaultBranch, "--force"])
-				await git.checkoutLocalBranch(branchName)
+				const savedWorktree = await git.getConfig("core.worktree")
+				await git.raw(["config", "--unset", "core.worktree"])
+				try {
+					await git.checkout([defaultBranch, "--force"])
+					await git.checkoutLocalBranch(branchName)
+				} finally {
+					if (savedWorktree.value) {
+						await git.addConfig("core.worktree", savedWorktree.value)
+					}
+				}
 				this.log(`[${this.constructor.name}#initShadowGit] created new branch ${branchName} from ${defaultBranch}`)
 				created = true
 			}
@@ -191,7 +196,6 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			await git.addConfig("user.name", "Roo Code")
 			await git.addConfig("user.email", "noreply@example.com")
 			await this.writeExcludeFile()
-			await this.stageAll(git)
 			const { commit } = await git.commit("initial commit", { "--allow-empty": null })
 			this.baseHash = commit
 			created = true
@@ -333,7 +337,11 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			}
 
 			const startTime = Date.now()
-			await this.stageTracked(this.git)
+			if (this._checkpoints.length === 0) {
+				await this.stageAll(this.git)
+			} else {
+				await this.stageTracked(this.git)
+			}
 			const commitArgs = options?.allowEmpty ? { "--allow-empty": null } : undefined
 			const result = await this.git.commit(message, commitArgs)
 			const fromHash = this._checkpoints[this._checkpoints.length - 1] ?? this.baseHash!
@@ -512,36 +520,10 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		const currentBranch = await git.revparse(["--abbrev-ref", "HEAD"])
 
 		if (currentBranch === branchName) {
-			const worktree = await git.getConfig("core.worktree")
-
-			try {
-				await git.raw(["config", "--unset", "core.worktree"])
-				await git.reset(["--hard"])
-				await git.clean("f", ["-d"])
-				const defaultBranch = branches.all.includes("main") ? "main" : "master"
-				await git.checkout([defaultBranch, "--force"])
-
-				await pWaitFor(
-					async () => {
-						const newBranch = await git.revparse(["--abbrev-ref", "HEAD"])
-						return newBranch === defaultBranch
-					},
-					{ interval: 500, timeout: 2_000 },
-				)
-
-				await git.branch(["-D", branchName])
-				return true
-			} catch (error) {
-				console.error(
-					`[${this.constructor.name}#deleteBranch] failed to delete branch ${branchName}: ${error instanceof Error ? error.message : String(error)}`,
-				)
-
-				return false
-			} finally {
-				if (worktree.value) {
-					await git.addConfig("core.worktree", worktree.value)
-				}
-			}
+			const defaultBranch = branches.all.includes("main") ? "main" : "master"
+			await git.raw(["symbolic-ref", "HEAD", `refs/heads/${defaultBranch}`])
+			await git.branch(["-D", branchName])
+			return true
 		} else {
 			await git.branch(["-D", branchName])
 			return true

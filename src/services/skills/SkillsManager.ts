@@ -47,6 +47,8 @@ export class SkillsManager {
 		for (const { dir, source, mode } of skillsDirs) {
 			await this.scanSkillsDirectory(dir, source, mode)
 		}
+
+		console.log(`[SkillsManager] Discovered ${this.skills.size} skills from ${skillsDirs.length} directories`)
 	}
 
 	/**
@@ -56,29 +58,32 @@ export class SkillsManager {
 	 * 2. Individual skill subdirectories are symlinks
 	 */
 	private async scanSkillsDirectory(dirPath: string, source: "global" | "project", mode?: string): Promise<void> {
-		if (!(await directoryExists(dirPath))) {
+		let dirExists = false
+		try {
+			dirExists = await directoryExists(dirPath)
+		} catch (error) {
+			console.error(`[SkillsManager] Error checking directory "${dirPath}":`, error)
+			return
+		}
+
+		if (!dirExists) {
 			return
 		}
 
 		try {
-			// Get the real path (resolves if dirPath is a symlink)
 			const realDirPath = await fs.realpath(dirPath)
-
-			// Read directory entries
 			const entries = await fs.readdir(realDirPath)
 
 			for (const entryName of entries) {
 				const entryPath = path.join(realDirPath, entryName)
 
-				// Check if this entry is a directory (follows symlinks automatically)
 				const stats = await fs.stat(entryPath).catch(() => null)
 				if (!stats?.isDirectory()) continue
 
-				// Load skill metadata - the skill name comes from the entry name (symlink name if symlinked)
 				await this.loadSkillMetadata(entryPath, source, mode, entryName)
 			}
-		} catch {
-			// Directory doesn't exist or can't be read - this is fine
+		} catch (error) {
+			console.error(`[SkillsManager] Error scanning skills directory "${dirPath}":`, error)
 		}
 	}
 
@@ -104,41 +109,37 @@ export class SkillsManager {
 			// Use gray-matter to parse frontmatter
 			const { data: frontmatter, content: body } = matter(fileContent)
 
-			// Validate required fields (only name and description for now)
-			if (!frontmatter.name || typeof frontmatter.name !== "string") {
-				console.error(`Skill at ${skillDir} is missing required 'name' field`)
-				return
-			}
-			if (!frontmatter.description || typeof frontmatter.description !== "string") {
-				console.error(`Skill at ${skillDir} is missing required 'description' field`)
-				return
-			}
-
-			// Validate that frontmatter name matches the skill name (directory name or symlink name)
-			// Per the Agent Skills spec: "name field must match the parent directory name"
+			const errors: string[] = []
 			const effectiveSkillName = skillName || path.basename(skillDir)
-			if (frontmatter.name !== effectiveSkillName) {
-				console.error(`Skill name "${frontmatter.name}" doesn't match directory "${effectiveSkillName}"`)
-				return
+
+			// Name: prefer frontmatter name, fall back to directory name
+			let name: string
+			if (frontmatter.name && typeof frontmatter.name === "string" && frontmatter.name.trim()) {
+				name = frontmatter.name.trim()
+			} else {
+				name = effectiveSkillName
+				errors.push(`Missing 'name' in frontmatter, using directory name "${name}"`)
 			}
 
-			// Validate skill name per agentskills.io spec using shared validation
-			const nameValidation = validateSkillNameShared(effectiveSkillName)
+			// Description: prefer frontmatter description, fall back to empty string
+			let description: string
+			if (frontmatter.description && typeof frontmatter.description === "string" && frontmatter.description.trim()) {
+				description = frontmatter.description.trim()
+			} else {
+				description = ""
+				errors.push(`Missing 'description' in frontmatter`)
+			}
+
+			// Validate skill name per agentskills.io spec (non-blocking: log error but still load)
+			const nameValidation = validateSkillNameShared(name)
 			if (!nameValidation.valid) {
-				const errorMessage = this.getSkillNameErrorMessage(effectiveSkillName, nameValidation.error!)
-				console.error(`Skill name "${effectiveSkillName}" is invalid: ${errorMessage}`)
-				return
+				const errorMessage = this.getSkillNameErrorMessage(name, nameValidation.error!)
+				errors.push(`Invalid name: ${errorMessage}`)
 			}
 
-			// Description constraints:
-			// - 1-1024 chars
-			// - non-empty (after trimming)
-			const description = frontmatter.description.trim()
-			if (description.length < 1 || description.length > 1024) {
-				console.error(
-					`Skill "${effectiveSkillName}" has an invalid description length: must be 1-1024 characters (got ${description.length})`,
-				)
-				return
+			// Description length check (non-blocking: log error but still load)
+			if (description.length > 0 && description.length > 1024) {
+				errors.push(`Description too long: ${description.length} chars (max 1024)`)
 			}
 
 			// Parse modeSlugs from frontmatter (new format) or fall back to directory-based mode
@@ -158,18 +159,28 @@ export class SkillsManager {
 			}
 
 			// Create unique key combining name, source, and modeSlugs for override resolution
-			// For backward compatibility, use first mode slug or undefined for the key
 			const primaryMode = modeSlugs?.[0]
-			const skillKey = this.getSkillKey(effectiveSkillName, source, primaryMode)
+			const skillKey = this.getSkillKey(name, source, primaryMode)
 
 			this.skills.set(skillKey, {
-				name: effectiveSkillName,
+				name,
 				description,
 				path: skillMdPath,
 				source,
 				mode: primaryMode, // Deprecated: kept for backward compatibility
 				modeSlugs, // New: array of mode slugs, undefined = any mode
+				loadErrors: errors.length > 0 ? errors : undefined,
 			})
+
+			// Log all errors to console for debugging
+			if (errors.length > 0) {
+				console.error(`[SkillsManager] SKILL "${name}" loaded with ${errors.length} issue(s):`)
+				for (const err of errors) {
+					console.error(`  - ${err}`)
+				}
+			} else {
+				console.log(`[SkillsManager] Loaded SKILL "${name}" from "${source}" (modeSlugs: ${JSON.stringify(modeSlugs)})`)
+			}
 		} catch (error) {
 			console.error(`Failed to load skill at ${skillDir}:`, error)
 		}
@@ -578,6 +589,8 @@ Add your skill instructions here.
 		const projectRooDir = provider?.cwd ? path.join(provider.cwd, ".roo") : null
 		const projectAgentsDir = provider?.cwd ? getProjectAgentsDirectoryForCwd(provider.cwd) : null
 
+		console.log(`[SkillsManager] getSkillsDirectories: globalRooDir="${globalRooDir}", globalAgentsDir="${globalAgentsDir}", projectRooDir="${projectRooDir}", projectAgentsDir="${projectAgentsDir}"`)
+
 		// Get list of modes to check for mode-specific skills
 		const modesList = await this.getAvailableModes()
 
@@ -618,6 +631,7 @@ Add your skill instructions here.
 			}
 		}
 
+		console.log(`[SkillsManager] getSkillsDirectories: scanning ${dirs.length} directories, modesList=[${modesList.join(", ")}]`)
 		return dirs
 	}
 

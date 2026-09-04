@@ -214,6 +214,13 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 		}
 
 		// Save the changes
+		// Save file snapshot before writing (new file: no original content to backup)
+		await task.saveFileSnapshot(
+			[{ relativePath: relPath, content: undefined }],
+			"apply_patch",
+			`Create file: ${relPath}`,
+		)
+
 		if (isPreventFocusDisruptionEnabled) {
 			await task.diffViewProvider.saveDirectly(relPath, newContent, true, diagnosticsEnabled, writeDelayMs)
 		} else {
@@ -273,6 +280,18 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 		}
 
 		// Delete the file
+		// Save file snapshot before deleting (backup file content)
+		try {
+			const fileContent = await fs.readFile(absolutePath, "utf-8")
+			await task.saveFileSnapshot(
+				[{ relativePath: relPath, content: fileContent }],
+				"apply_patch",
+				`Delete file: ${relPath}`,
+			)
+		} catch {
+			// If we can't read the file for snapshot, proceed with delete anyway
+		}
+
 		try {
 			await fs.unlink(absolutePath)
 		} catch (error) {
@@ -408,6 +427,13 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 			}
 
 			// Save new content to the new path
+			// Save file snapshot before writing (move operation: backup original)
+			await task.saveFileSnapshot(
+				[{ relativePath: relPath, content: originalContent }],
+				"apply_patch",
+				`Move file: ${relPath} -> ${change.movePath}`,
+			)
+
 			if (isPreventFocusDisruptionEnabled) {
 				await task.diffViewProvider.saveDirectly(
 					change.movePath,
@@ -433,6 +459,13 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 			await task.fileContextTracker.trackFileContext(change.movePath, "roo_edited" as RecordSource)
 		} else {
 			// Save changes to the same file
+			// Save file snapshot before writing
+			await task.saveFileSnapshot(
+				[{ relativePath: relPath, content: originalContent }],
+				"apply_patch",
+				`Update file: ${relPath}`,
+			)
+
 			if (isPreventFocusDisruptionEnabled) {
 				await task.diffViewProvider.saveDirectly(relPath, newContent, false, diagnosticsEnabled, writeDelayMs)
 			} else {

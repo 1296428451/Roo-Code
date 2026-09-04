@@ -25,7 +25,7 @@ const HYDRATION_RETRY_WINDOW_MS = 160
 
 export type ScrollPhase = "HYDRATING_PINNED_TO_BOTTOM" | "ANCHORED_FOLLOWING" | "USER_BROWSING_HISTORY"
 
-export type ScrollFollowDisengageSource = "wheel-up" | "row-expansion" | "keyboard-nav-up" | "pointer-scroll-up"
+export type ScrollFollowDisengageSource = "wheel-up" | "row-expansion" | "keyboard-nav-up" | "pointer-scroll-up" | "checkpoint-restore"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -469,6 +469,15 @@ export function useScrollLifecycle({
 		[enterUserBrowsingHistory, hasTask, isHidden, scrollContainerRef],
 	)
 	useEvent("keydown", handleScrollKeyDown, window)
+
+	// -----------------------------------------------------------------------
+	// Checkpoint restore: stop auto-following so the view doesn't jump
+	// -----------------------------------------------------------------------
+
+	const handleCheckpointRestore = useCallback(() => {
+		enterUserBrowsingHistory("checkpoint-restore")
+	}, [enterUserBrowsingHistory])
+	useEvent("checkpoint-restore", handleCheckpointRestore, window)
 
 	// -----------------------------------------------------------------------
 	// Return public API

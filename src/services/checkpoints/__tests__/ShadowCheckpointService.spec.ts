@@ -78,6 +78,9 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 
 		describe(`${klass.name}#getDiff`, () => {
 			it("returns the correct diff between commits", async () => {
+				const initialCommit = await service.saveCheckpoint("Initial checkpoint")
+				expect(initialCommit?.commit).toBeTruthy()
+
 				await fs.writeFile(testFile, "Ahoy, world!")
 				const commit1 = await service.saveCheckpoint("Ahoy, world!")
 				expect(commit1?.commit).toBeTruthy()
@@ -86,14 +89,14 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 				const commit2 = await service.saveCheckpoint("Goodbye, world!")
 				expect(commit2?.commit).toBeTruthy()
 
-				const diff1 = await service.getDiff({ to: commit1!.commit })
+				const diff1 = await service.getDiff({ from: initialCommit!.commit, to: commit1!.commit })
 				expect(diff1).toHaveLength(1)
 				expect(diff1[0].paths.relative).toBe("test.txt")
 				expect(diff1[0].paths.absolute).toBe(testFile)
 				expect(diff1[0].content.before).toBe("Hello, world!")
 				expect(diff1[0].content.after).toBe("Ahoy, world!")
 
-				const diff2 = await service.getDiff({ from: service.baseHash, to: commit2!.commit })
+				const diff2 = await service.getDiff({ from: initialCommit!.commit, to: commit2!.commit })
 				expect(diff2).toHaveLength(1)
 				expect(diff2[0].paths.relative).toBe("test.txt")
 				expect(diff2[0].paths.absolute).toBe(testFile)
@@ -141,10 +144,13 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 
 		describe(`${klass.name}#saveCheckpoint`, () => {
 			it("creates a checkpoint if there are pending changes", async () => {
+				const initialCommit = await service.saveCheckpoint("Initial checkpoint")
+				expect(initialCommit?.commit).toBeTruthy()
+
 				await fs.writeFile(testFile, "Ahoy, world!")
 				const commit1 = await service.saveCheckpoint("First checkpoint")
 				expect(commit1?.commit).toBeTruthy()
-				const details1 = await service.getDiff({ to: commit1!.commit })
+				const details1 = await service.getDiff({ from: initialCommit!.commit, to: commit1!.commit })
 				expect(details1[0].content.before).toContain("Hello, world!")
 				expect(details1[0].content.after).toContain("Ahoy, world!")
 
@@ -163,9 +169,8 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 				await service.restoreCheckpoint(commit2!.commit)
 				expect(await fs.readFile(testFile, "utf-8")).toBe("Hola, world!")
 
-				// Switch back to initial commit.
-				expect(service.baseHash).toBeTruthy()
-				await service.restoreCheckpoint(service.baseHash!)
+				// Switch back to initial checkpoint.
+				await service.restoreCheckpoint(initialCommit!.commit)
 				expect(await fs.readFile(testFile, "utf-8")).toBe("Hello, world!")
 			})
 
@@ -359,6 +364,10 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 				const gitDir = path.join(newService.checkpointsDir, ".git")
 				expect(await fs.stat(gitDir)).toBeTruthy()
 
+				// Save initial checkpoint to capture baseline state.
+				const initialCommit = await newService.saveCheckpoint("Initial checkpoint")
+				expect(initialCommit?.commit).toBeTruthy()
+
 				// Save a new checkpoint: Ahoy, world!
 				await fs.writeFile(newTestFile, "Ahoy, world!")
 				const commit1 = await newService.saveCheckpoint("Ahoy, world!")
@@ -366,7 +375,7 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 				expect(await fs.readFile(newTestFile, "utf-8")).toBe("Ahoy, world!")
 
 				// Restore "Hello, world!"
-				await newService.restoreCheckpoint(newService.baseHash!)
+				await newService.restoreCheckpoint(initialCommit!.commit)
 				expect(await fs.readFile(newTestFile, "utf-8")).toBe("Hello, world!")
 
 				// Restore "Ahoy, world!"
@@ -442,8 +451,8 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 				await expect(service.initShadowGit()).resolves.not.toThrow()
 
 				// Verify that the nested git paths were detected and stored
-				expect(service.nestedGitPaths).toBeDefined()
-				expect(service.nestedGitPaths.length).toBe(1)
+				expect((service as any).nestedGitPaths).toBeDefined()
+				expect((service as any).nestedGitPaths.length).toBe(1)
 
 				// Clean up.
 				vitest.restoreAllMocks()
