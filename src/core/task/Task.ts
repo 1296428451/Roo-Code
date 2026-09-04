@@ -2729,7 +2729,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					const iterator = stream[Symbol.asyncIterator]()
 
 					// Helper to race iterator.next() with abort signal and streaming idle timeout
-					const STREAMING_IDLE_TIMEOUT_MS = 30_000 // 30s without any new chunk = network stall
+					const STREAMING_IDLE_TIMEOUT_MS = 120_000 // 120s without any new chunk = network stall
 					const nextChunkWithAbort = async () => {
 						const nextPromise = iterator.next()
 
