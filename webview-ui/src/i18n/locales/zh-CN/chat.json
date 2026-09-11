@@ -24,7 +24,11 @@
 	"unpin": "取消置顶",
 	"pin": "置顶",
 	"fileChangesInConversation": {
-		"header": "此对话中已更改 {{count}} 个文件"
+		"header": "此对话中已更改 {{count}} 个文件",
+		"headerWithDeleted": "此对话中已更改 {{count}} 个文件（其中 {{deletedCount}} 个已删除，可恢复）",
+		"restore": "恢复",
+		"restoring": "恢复中…",
+		"restoreOriginalTooltip": "将此文件恢复到本次任务开始时的原始内容"
 	},
 	"tokenProgress": {
 		"availableSpace": "可用: {{amount}}",
@@ -184,6 +188,8 @@
 		"wantsToRead": "需要读取文件",
 		"wantsToReadOutsideWorkspace": "请求访问外部文件",
 		"didRead": "已读取文件",
+		"wantsToDelete": "需要删除文件: {{path}}",
+		"wantsToDeleteOutsideWorkspace": "需要删除工作区外的文件: {{path}}",
 		"wantsToEdit": "需要编辑文件",
 		"wantsToEditOutsideWorkspace": "需要编辑外部文件",
 		"wantsToEditProtected": "需要编辑受保护的配置文件",

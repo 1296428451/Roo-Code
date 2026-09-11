@@ -296,6 +296,73 @@ export class FileSnapshotService {
 	}
 
 	/**
+	 * Restore a single file to its earliest captured content (before any
+	 * edit in this task). Used by the per-file "Restore" button in the
+	 * FileChangesPanel.
+	 *
+	 * Behaviour:
+	 * - Finds the first snapshot (lowest index) whose `meta.files` includes
+	 *   `relativePath`, and copies that snapshot's version back to the
+	 *   workspace.
+	 * - If a file already exists at the target, it is **overwritten**
+	 *   unconditionally — restoring an edited file is expected to replace
+	 *   whatever the current content is. (For deleted-file restore the
+	 *   overwrite policy is different and handled by DeletedFilesService.)
+	 * - Throws if no snapshot exists for the file or the snapshot copy is
+	 *   unreadable.
+	 * - Removes all later snapshots that captured this same file, since
+	 *   they no longer represent the pre-edit history (consistent with
+	 *   `restoreSnapshot`).
+	 * - Returns the index of the snapshot that was applied.
+	 */
+	async restoreFileToOriginal(relativePath: string): Promise<number> {
+		if (!this.initialized) {
+			await this.init()
+		}
+
+		const firstEntry = this._snapshots.find((s) => s.meta.files.includes(relativePath))
+		if (!firstEntry) {
+			throw new Error(`No snapshot found for "${relativePath}"`)
+		}
+
+		const srcPath = path.join(firstEntry.dir, relativePath)
+		const destPath = path.resolve(this.workspaceDir, relativePath)
+		const destDir = path.dirname(destPath)
+
+		// Read the original content from the earliest snapshot first so we can
+		// bail with a clear error if the snapshot copy itself is missing.
+		let content: string
+		try {
+			content = await fs.readFile(srcPath, "utf-8")
+		} catch {
+			throw new Error(`Snapshot copy for "${relativePath}" is missing or unreadable`)
+		}
+
+		await fs.mkdir(destDir, { recursive: true })
+
+		// Always overwrite (if something exists) for the edit-restore case.
+		await fs.writeFile(destPath, content, "utf-8")
+
+		// Remove all snapshots at index > applied index (they were captured
+		// after the restore point and are now stale for this file).
+		const appliedIndex = firstEntry.meta.index
+		const toRemove = this._snapshots.filter((s) => s.meta.index > appliedIndex)
+		for (const s of toRemove) {
+			try {
+				await fs.rm(s.dir, { recursive: true, force: true })
+			} catch {
+				// best effort
+			}
+		}
+		this._snapshots = this._snapshots.filter((s) => s.meta.index <= appliedIndex)
+
+		this.log(
+			`[FileSnapshotService] restored ${relativePath} to snapshot #${appliedIndex} (${firstEntry.meta.label})`,
+		)
+		return appliedIndex
+	}
+
+	/**
 	 * Get a list of all snapshots for UI display.
 	 */
 	getSnapshots(): SnapshotEntry[] {

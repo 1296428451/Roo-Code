@@ -291,6 +291,40 @@ describe("NativeToolCallParser", () => {
 				})
 			})
 		})
+
+		describe("delete_file tool", () => {
+			it("should parse delete_file args with path", () => {
+				const toolCall = {
+					id: "toolu_delete_123",
+					name: "delete_file" as const,
+					arguments: JSON.stringify({
+						path: "src/components/OldComponent.tsx",
+					}),
+				}
+
+				const result = NativeToolCallParser.parseToolCall(toolCall)
+
+				expect(result).not.toBeNull()
+				expect(result?.type).toBe("tool_use")
+				if (result?.type === "tool_use") {
+					expect(result.nativeArgs).toBeDefined()
+					const nativeArgs = result.nativeArgs as { path: string }
+					expect(nativeArgs.path).toBe("src/components/OldComponent.tsx")
+				}
+			})
+
+			it("should return null when delete_file args are missing path", () => {
+				const toolCall = {
+					id: "toolu_delete_124",
+					name: "delete_file" as const,
+					arguments: JSON.stringify({}),
+				}
+
+				const result = NativeToolCallParser.parseToolCall(toolCall)
+
+				expect(result).toBeNull()
+			})
+		})
 	})
 
 	describe("processStreamingChunk", () => {
@@ -309,6 +343,21 @@ describe("NativeToolCallParser", () => {
 				expect(result?.nativeArgs).toBeDefined()
 				const nativeArgs = result?.nativeArgs as { path: string }
 				expect(nativeArgs.path).toBe("src/test.ts")
+			})
+		})
+
+		describe("delete_file tool", () => {
+			it("should emit a partial ToolUse with nativeArgs.path during streaming", () => {
+				const id = "toolu_streaming_delete_123"
+				NativeToolCallParser.startStreamingToolCall(id, "delete_file")
+
+				const fullArgs = JSON.stringify({ path: "src/old.ts" })
+				const result = NativeToolCallParser.processStreamingChunk(id, fullArgs)
+
+				expect(result).not.toBeNull()
+				expect(result?.nativeArgs).toBeDefined()
+				const nativeArgs = result?.nativeArgs as { path: string }
+				expect(nativeArgs.path).toBe("src/old.ts")
 			})
 		})
 	})
@@ -339,6 +388,29 @@ describe("NativeToolCallParser", () => {
 					expect(nativeArgs.path).toBe("finalized.ts")
 					expect(nativeArgs.offset).toBe(1)
 					expect(nativeArgs.limit).toBe(10)
+				}
+			})
+		})
+
+		describe("delete_file tool", () => {
+			it("should parse delete_file args on finalize", () => {
+				const id = "toolu_finalize_delete_123"
+				NativeToolCallParser.startStreamingToolCall(id, "delete_file")
+
+				NativeToolCallParser.processStreamingChunk(
+					id,
+					JSON.stringify({
+						path: "src/to-delete.ts",
+					}),
+				)
+
+				const result = NativeToolCallParser.finalizeStreamingToolCall(id)
+
+				expect(result).not.toBeNull()
+				expect(result?.type).toBe("tool_use")
+				if (result?.type === "tool_use") {
+					const nativeArgs = result.nativeArgs as { path: string }
+					expect(nativeArgs.path).toBe("src/to-delete.ts")
 				}
 			})
 		})

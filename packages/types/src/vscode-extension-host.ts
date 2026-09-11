@@ -92,10 +92,21 @@ export interface ExtensionMessage {
 		| "folderSelected"
 		| "skills"
 		| "fileContent"
+		| "deletedFilesUpdated"
+		| "fileRestoreResult"
 	suppressMessage?: boolean
 	text?: string
 	/** For fileContent: { path, content, error? } */
 	fileContent?: { path: string; content: string | null; error?: string }
+	/** For deletedFilesUpdated: list of files currently held in the task trash */
+	deletedFiles?: { relativePath: string; trashedAt: number; size: number }[]
+	/** For fileRestoreResult: result of a per-file restore (deleted or modified). */
+	fileRestoreResult?: {
+		kind: "deleted" | "modified"
+		relativePath: string
+		success: boolean
+		error?: string
+	}
 	payload?: any // eslint-disable-line @typescript-eslint/no-explicit-any
 	checkpointWarning?: {
 		type: "WAIT_TIMEOUT" | "INIT_TIMEOUT"
@@ -462,6 +473,8 @@ export interface WebviewMessage {
 		| "openCustomModesSettings"
 		| "checkpointDiff"
 		| "checkpointRestore"
+		| "restoreDeletedFile"
+		| "restoreFileToOriginal"
 		| "deleteMcpServer"
 		| "codebaseIndexEnabled"
 		| "searchFiles"
@@ -543,6 +556,8 @@ export interface WebviewMessage {
 	dataUri?: string
 	askResponse?: ClineAskResponse
 	apiConfiguration?: ProviderSettings
+	/** Explicitly bind a loaded profile to the currently selected mode. */
+	persistModeConfig?: boolean
 	images?: string[]
 	bool?: boolean
 	value?: number

@@ -908,6 +908,8 @@ const ModesView = () => {
 									vscode.postMessage({
 										type: "loadApiConfiguration",
 										text: value,
+										// Selecting a profile from the Modes page explicitly binds it to this mode.
+										persistModeConfig: true,
 									})
 								}}>
 								<SelectTrigger className="w-full">

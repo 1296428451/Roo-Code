@@ -489,6 +489,7 @@ const ApiOptions = ({
 							apiConfiguration={apiConfiguration}
 							setApiConfigurationField={setApiConfigurationField}
 							routerModels={routerModels}
+							refetchRouterModels={refetchRouterModels}
 							selectedModelId={selectedModelId}
 							uriScheme={uriScheme}
 							simplifySettings={fromWelcomeView}
@@ -679,6 +680,7 @@ const ApiOptions = ({
 							apiConfiguration={apiConfiguration}
 							setApiConfigurationField={setApiConfigurationField}
 							routerModels={routerModels}
+							refetchRouterModels={refetchRouterModels}
 							organizationAllowList={organizationAllowList}
 							modelValidationError={modelValidationError}
 							simplifySettings={fromWelcomeView}
@@ -719,6 +721,7 @@ const ApiOptions = ({
 								organizationAllowList={organizationAllowList}
 								errorMessage={modelValidationError}
 								simplifySettings={fromWelcomeView}
+								refetchModels={refetchRouterModels}
 								onModelChange={(modelId) =>
 									handleModelChangeSideEffects(
 										activeSelectedProvider,

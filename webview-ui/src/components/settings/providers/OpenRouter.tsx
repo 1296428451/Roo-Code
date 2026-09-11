@@ -9,6 +9,7 @@ import {
 	openRouterDefaultModelId,
 } from "@roo-code/types"
 
+import { vscode } from "@src/utils/vscode"
 import { useAppTranslation } from "@src/i18n/TranslationContext"
 import { getOpenRouterAuthUrl } from "@src/oauth/urls"
 import { VSCodeButtonLink } from "@src/components/common/VSCodeButtonLink"
@@ -22,6 +23,7 @@ type OpenRouterProps = {
 	apiConfiguration: ProviderSettings
 	setApiConfigurationField: (field: keyof ProviderSettings, value: ProviderSettings[keyof ProviderSettings]) => void
 	routerModels?: RouterModels
+	refetchRouterModels: () => void
 	selectedModelId: string
 	uriScheme: string | undefined
 	simplifySettings?: boolean
@@ -33,6 +35,7 @@ export const OpenRouter = ({
 	apiConfiguration,
 	setApiConfigurationField,
 	routerModels,
+	refetchRouterModels,
 	uriScheme,
 	simplifySettings,
 	organizationAllowList,
@@ -114,6 +117,13 @@ export const OpenRouter = ({
 				organizationAllowList={organizationAllowList}
 				errorMessage={modelValidationError}
 				simplifySettings={simplifySettings}
+				refetchModels={() => {
+					vscode.postMessage({
+						type: "requestRouterModels",
+						values: { provider: "openrouter", refresh: true },
+					})
+					refetchRouterModels()
+				}}
 			/>
 		</>
 	)

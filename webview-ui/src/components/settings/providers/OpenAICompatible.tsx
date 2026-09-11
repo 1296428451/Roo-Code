@@ -15,6 +15,7 @@ import {
 
 import { useAppTranslation } from "@src/i18n/TranslationContext"
 import { Button, StandardTooltip } from "@src/components/ui"
+import { vscode } from "@src/utils/vscode"
 
 import { convertHeadersToObject } from "../utils/headers"
 import { inputEventTransform, noTransform } from "../transforms"
@@ -123,6 +124,25 @@ export const OpenAICompatible = ({
 
 	useEvent("message", onMessage)
 
+	const handleRefreshModels = useCallback(() => {
+		const baseUrl = apiConfiguration?.openAiBaseUrl
+		const apiKey = apiConfiguration?.openAiApiKey
+
+		if (!baseUrl || !apiKey) {
+			return
+		}
+
+		vscode.postMessage({
+			type: "requestOpenAiModels",
+			values: {
+				baseUrl,
+				apiKey,
+				customHeaders: {},
+				openAiHeaders: convertHeadersToObject(customHeaders),
+			},
+		})
+	}, [apiConfiguration?.openAiBaseUrl, apiConfiguration?.openAiApiKey, customHeaders])
+
 	return (
 		<>
 			<VSCodeTextField
@@ -152,6 +172,7 @@ export const OpenAICompatible = ({
 				organizationAllowList={organizationAllowList}
 				errorMessage={modelValidationError}
 				simplifySettings={simplifySettings}
+				refetchModels={handleRefreshModels}
 			/>
 			<R1FormatSetting
 				onChange={handleInputChange("openAiR1FormatEnabled", noTransform)}

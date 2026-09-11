@@ -100,6 +100,7 @@ export type NativeToolArgs = {
 	search_and_replace: { file_path: string; old_string: string; new_string: string; replace_all?: boolean }
 	search_replace: { file_path: string; old_string: string; new_string: string }
 	edit_file: { file_path: string; old_string: string; new_string: string; expected_replacements?: number }
+	delete_file: { path: string }
 	apply_patch: { patch: string }
 	list_files: { path: string; recursive?: boolean }
 	new_task: { mode: string; message: string; todos?: string }
@@ -275,6 +276,7 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
 	search_and_replace: "apply changes using search and replace",
 	search_replace: "apply single search and replace",
 	edit_file: "edit files using search and replace",
+	delete_file: "delete files",
 	apply_patch: "apply patches using codex format",
 	search_files: "search files",
 	list_files: "list files",
@@ -298,8 +300,8 @@ export const TOOL_GROUPS: Record<ToolGroup, ToolGroupConfig> = {
 		tools: ["read_file", "search_files", "list_files", "codebase_search"],
 	},
 	edit: {
-		tools: ["apply_diff", "write_to_file", "generate_image"],
-		customTools: ["edit", "search_replace", "edit_file", "apply_patch"],
+		tools: ["apply_diff", "write_to_file", "generate_image", "edit_file", "delete_file"],
+		customTools: ["edit", "search_replace", "apply_patch"],
 	},
 	command: {
 		tools: ["execute_command", "read_command_output"],

@@ -1,4 +1,5 @@
 import * as path from "path"
+import * as fs from "fs/promises"
 import * as vscode from "vscode"
 import os from "os"
 import crypto from "crypto"
@@ -73,7 +74,7 @@ import { GlobalFileNames } from "../../shared/globalFileNames"
 // services
 import { McpHub } from "../../services/mcp/McpHub"
 import { McpServerManager } from "../../services/mcp/McpServerManager"
-import { RepoPerTaskCheckpointService, FileSnapshotService } from "../../services/checkpoints"
+import { RepoPerTaskCheckpointService, FileSnapshotService, DeletedFilesService } from "../../services/checkpoints"
 
 // integrations
 import { DiffViewProvider } from "../../integrations/editor/DiffViewProvider"
@@ -135,6 +136,7 @@ const MAX_EXPONENTIAL_BACKOFF_SECONDS = 600 // 10 minutes
 const DEFAULT_USAGE_COLLECTION_TIMEOUT_MS = 5000 // 5 seconds
 const FORCED_CONTEXT_REDUCTION_PERCENT = 75 // Keep 75% of context (remove 25%) on context window errors
 const MAX_CONTEXT_WINDOW_RETRIES = 3 // Maximum retries for context window errors
+const MAX_SUBTASK_AUTO_FOLLOWUPS = 3 // Maximum automatic "summarize & return via tool" follow-ups for a subtask that ended its turn without calling any tool
 
 export interface TaskOptions extends CreateTaskOptions {
 	provider: ClineProvider
@@ -320,6 +322,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	consecutiveMistakeCountForApplyDiff: Map<string, number> = new Map()
 	consecutiveMistakeCountForEditFile: Map<string, number> = new Map()
 	consecutiveNoAssistantMessagesCount: number = 0
+	// Tracks consecutive turns where a subtask ended with plain text and no tool calls,
+	// used to bound the automatic "summarize & return via attempt_completion" follow-up.
+	consecutiveSubtaskNoToolTurns: number = 0
 	toolUsage: ToolUsage = {}
 
 	// Checkpoints
@@ -328,6 +333,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	checkpointService?: RepoPerTaskCheckpointService
 	checkpointServiceInitializing = false
 	fileSnapshotService?: FileSnapshotService
+	deletedFilesService?: DeletedFilesService
 
 	// Message Queue Service
 	public readonly messageQueueService: MessageQueueService
@@ -554,6 +560,20 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 
 		onCreated?.(this)
+
+		// Initialise the deleted-files (trash) service early so the very first
+		// state push to the webview includes any files that were deleted in a
+		// previous session of this task. Without this, resuming an old task
+		// would show an empty deleted-files panel until the next deletion fires.
+		this.initDeletedFilesService()
+			.then(() => {
+				const provider = this.providerRef.deref()
+				provider?.postMessageToWebview({
+					type: "deletedFilesUpdated",
+					deletedFiles: this.getDeletedFiles(),
+				})
+			})
+			.catch((err) => console.error("[Task] failed to push initial deletedFilesUpdated:", err))
 
 		if (startTask) {
 			this._started = true
@@ -3510,6 +3530,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					// Push to stack if there's content OR if we're paused waiting for a subtask.
 					// When paused, we push an empty item so the loop continues to the pause check.
 					if (this.userMessageContent.length > 0 || this.isPaused) {
+						if (this.userMessageContent.length > 0) {
+							// Tools were executed this turn; the subtask is behaving normally.
+							this.consecutiveSubtaskNoToolTurns = 0
+						}
 						stack.push({
 							userContent: [...this.userMessageContent], // Create a copy to avoid mutation issues
 							includeFileDetails: false, // Subsequent iterations don't need file details
@@ -3519,32 +3543,68 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						await new Promise((resolve) => setImmediate(resolve))
 					} else {
 						// No tool results were generated (model responded with plain text).
-						// Ask the user for follow-up input to keep the conversation going,
-						// instead of silently exiting the loop.
-						const { response, text, images } = await this.ask("followup", "", false)
 
-						if (response === "messageResponse" || response === "yesButtonClicked") {
-							if (text) {
-								await this.say("user_feedback", text, images)
-							}
+						// Subtask auto follow-up: if this is a subagent (it has a parent task) and it
+						// ended its turn without calling any tool AND without calling the completion
+						// tool, automatically inject a user message asking it to summarize what it
+						// did and return the result to the main agent via attempt_completion.
+						// Bounded by MAX_SUBTASK_AUTO_FOLLOWUPS to prevent infinite loops; after the
+						// limit is exceeded we fall back to the interactive follow-up ask below.
+						if ((this.parentTaskId || this.parentTask) && this.consecutiveSubtaskNoToolTurns < MAX_SUBTASK_AUTO_FOLLOWUPS) {
+							this.consecutiveSubtaskNoToolTurns++
 
-							const userMessageBlocks: Anthropic.Messages.ContentBlockParam[] = []
+							const autoFollowupMessage = `<system_message>
+[Automatic follow-up] Your previous response ended without calling any tools and without calling the attempt_completion tool, so no result was returned to the main agent.
 
-							if (text) {
-								userMessageBlocks.push({
-									type: "text" as const,
-									text: `<user_message>\n${text}\n</user_message>`,
-								})
-							}
+Respond now by calling the attempt_completion tool with the \`result\` parameter containing:
+1. A summary of what you did in this subtask (steps taken, tools used, files modified).
+2. The final task result / answer that the main agent needs.
 
-							if (images) {
-								userMessageBlocks.push(...formatResponse.imageBlocks(images))
-							}
+If your work is NOT actually complete, continue working by calling the appropriate tools instead. Do not end your turn again without calling a tool.
+</system_message>`
+
+							await this.say(
+								"text",
+								`[Subtask auto follow-up ${this.consecutiveSubtaskNoToolTurns}/${MAX_SUBTASK_AUTO_FOLLOWUPS}] No tool call and no attempt_completion detected - asking subagent to summarize its task result and return it via attempt_completion.`,
+							)
 
 							stack.push({
-								userContent: userMessageBlocks,
+								userContent: [
+									{
+										type: "text" as const,
+										text: autoFollowupMessage,
+									},
+								],
 								includeFileDetails: false,
 							})
+						} else {
+							// Ask the user for follow-up input to keep the conversation going,
+							// instead of silently exiting the loop.
+							const { response, text, images } = await this.ask("followup", "", false)
+
+							if (response === "messageResponse" || response === "yesButtonClicked") {
+								if (text) {
+									await this.say("user_feedback", text, images)
+								}
+
+								const userMessageBlocks: Anthropic.Messages.ContentBlockParam[] = []
+
+								if (text) {
+									userMessageBlocks.push({
+										type: "text" as const,
+										text: `<user_message>\n${text}\n</user_message>`,
+									})
+								}
+
+								if (images) {
+									userMessageBlocks.push(...formatResponse.imageBlocks(images))
+								}
+
+								stack.push({
+									userContent: userMessageBlocks,
+									includeFileDetails: false,
+								})
+							}
 						}
 					}
 
@@ -4479,6 +4539,115 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			await this.initFileSnapshotService()
 		}
 		return this.fileSnapshotService?.getDiff({ from: fromId, to: toId }) ?? []
+	}
+
+	/**
+	 * Initialize the DeletedFilesService for this task. Called lazily by
+	 * the trash helpers below.
+	 */
+	private async initDeletedFilesService(): Promise<void> {
+		if (this.deletedFilesService) return
+		try {
+			const taskDir = await getTaskDirectoryPath(this.globalStoragePath, this.taskId)
+			this.deletedFilesService = new DeletedFilesService(
+				this.taskId,
+				taskDir,
+				this.cwd,
+				(msg) => console.log(msg),
+			)
+			await this.deletedFilesService.init()
+		} catch (err) {
+			console.error("[Task] Failed to init DeletedFilesService:", err)
+		}
+	}
+
+	/**
+	 * Move a workspace file into the per-task .trash directory instead of
+	 * deleting it. Returns true if the file was moved, false if the file
+	 * did not exist (caller can no-op or fall back to unlink).
+	 *
+	 * Falls back to a plain unlink if the move itself fails, so that the
+	 * user-facing delete still succeeds even on exotic filesystems.
+	 */
+	public async moveDeletedFileToTrash(relativePath: string): Promise<boolean> {
+		await this.initDeletedFilesService()
+		try {
+			const entry = await this.deletedFilesService?.moveToTrash(relativePath)
+			if (entry) {
+				// Notify the webview so the FileChangesPanel re-renders with the new entry.
+				const provider = this.providerRef.deref()
+				provider?.postMessageToWebview({
+					type: "deletedFilesUpdated",
+					deletedFiles: this.getDeletedFiles(),
+				})
+				// Also emit a per-event chat row so the deletion is visible in the timeline.
+				await this.say(
+					"deleted_file",
+					JSON.stringify({
+						relativePath: entry.relativePath,
+						trashedAt: entry.trashedAt,
+						size: entry.size,
+					}),
+				).catch((err) => console.error("[Task] failed to emit deleted_file say:", err))
+			}
+			return entry !== undefined
+		} catch (err) {
+			console.error(
+				`[Task#${this.taskId}] Failed to move ${relativePath} to trash, falling back to unlink:`,
+				err,
+			)
+			// Fallback: try to unlink the file directly (best effort).
+			try {
+				const absolutePath = path.resolve(this.cwd, relativePath)
+				await fs.unlink(absolutePath)
+				return true
+			} catch {
+				return false
+			}
+		}
+	}
+
+	/**
+	 * Restore a file from the task trash back to its original workspace path.
+	 * @param relativePath - the workspace-relative path to restore.
+	 * @param options.overwrite - when true, overwrite an existing file at the
+	 *   target. When false (default), throw if a file already exists.
+	 */
+	public async restoreDeletedFile(
+		relativePath: string,
+		options: { overwrite?: boolean } = {},
+	): Promise<boolean> {
+		await this.initDeletedFilesService()
+		try {
+			return (await this.deletedFilesService?.restoreFromTrash(relativePath, options)) ?? false
+		} catch (err) {
+			console.error(`[Task#${this.taskId}] Failed to restore ${relativePath} from trash:`, err)
+			throw err
+		}
+	}
+
+	/**
+	 * List of files currently held in the task trash.
+	 */
+	public getDeletedFiles() {
+		return this.deletedFilesService?.getEntries() ?? []
+	}
+
+	/**
+	 * Restore a single file to the version captured in its earliest
+	 * FileSnapshotService snapshot (i.e. the state before any edit in this
+	 * task). Throws an Error with a human-readable message if the file is
+	 * not in any snapshot, the snapshot copy is unreadable, or the target
+	 * file already exists.
+	 */
+	public async restoreFileToOriginal(relativePath: string): Promise<number> {
+		if (!this.fileSnapshotService) {
+			await this.initFileSnapshotService()
+		}
+		if (!this.fileSnapshotService) {
+			throw new Error("FileSnapshotService not initialized")
+		}
+		return await this.fileSnapshotService.restoreFileToOriginal(relativePath)
 	}
 
 	private buildCleanConversationHistory(

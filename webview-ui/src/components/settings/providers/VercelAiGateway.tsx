@@ -8,6 +8,7 @@ import {
 	vercelAiGatewayDefaultModelId,
 } from "@roo-code/types"
 
+import { vscode } from "@src/utils/vscode"
 import { useAppTranslation } from "@src/i18n/TranslationContext"
 import { VSCodeButtonLink } from "@src/components/common/VSCodeButtonLink"
 
@@ -18,6 +19,7 @@ type VercelAiGatewayProps = {
 	apiConfiguration: ProviderSettings
 	setApiConfigurationField: (field: keyof ProviderSettings, value: ProviderSettings[keyof ProviderSettings]) => void
 	routerModels?: RouterModels
+	refetchRouterModels: () => void
 	organizationAllowList: OrganizationAllowList
 	modelValidationError?: string
 	simplifySettings?: boolean
@@ -27,6 +29,7 @@ export const VercelAiGateway = ({
 	apiConfiguration,
 	setApiConfigurationField,
 	routerModels,
+	refetchRouterModels,
 	organizationAllowList,
 	modelValidationError,
 	simplifySettings,
@@ -76,6 +79,13 @@ export const VercelAiGateway = ({
 				organizationAllowList={organizationAllowList}
 				errorMessage={modelValidationError}
 				simplifySettings={simplifySettings}
+				refetchModels={() => {
+					vscode.postMessage({
+						type: "requestRouterModels",
+						values: { provider: "vercel-ai-gateway", refresh: true },
+					})
+					refetchRouterModels()
+				}}
 			/>
 		</>
 	)

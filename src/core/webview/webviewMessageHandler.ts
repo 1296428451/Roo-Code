@@ -1,4 +1,5 @@
 import type { WebviewMessage } from "@roo-code/types"
+import * as vscode from "vscode"
 
 import { ClineProvider } from "./ClineProvider"
 import {
@@ -206,6 +207,114 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 		case "checkpointDiff":
 			await handleCheckpointOperations(ctx, message)
 			break
+
+		case "restoreDeletedFile": {
+			const task = provider.getCurrentTask()
+			const relativePath = message.text
+			const overwrite = message.values?.overwrite === true
+			if (!task || !relativePath) {
+				break
+			}
+
+			// If the target file already exists AND the user has not yet
+			// confirmed overwrite, ask via a native modal first.
+			if (!overwrite) {
+				const cwd = task.cwd
+				const targetPath = cwd
+					? require("path").resolve(cwd, relativePath)
+					: relativePath
+				const fs = require("fs") as typeof import("fs")
+				if (fs.existsSync(targetPath)) {
+					const choice = await vscode.window.showWarningMessage(
+						`A file already exists at "${relativePath}". Overwrite it with the trashed version?`,
+						{ modal: true },
+						"Overwrite",
+						"Cancel",
+					)
+					if (choice !== "Overwrite") {
+						// User cancelled — surface that as a non-error result so the
+						// UI drops its loading state.
+						provider.postMessageToWebview({
+							type: "fileRestoreResult",
+							fileRestoreResult: {
+								kind: "deleted",
+								relativePath,
+								success: false,
+								error: "Cancelled by user",
+							},
+						})
+						break
+					}
+				}
+			}
+
+			try {
+				await task.restoreDeletedFile(relativePath, { overwrite })
+				// Broadcast the new (now-shorter) trash list so all open webviews
+				// refresh their FileChangesPanel immediately.
+				provider.postMessageToWebview({
+					type: "deletedFilesUpdated",
+					deletedFiles: task.getDeletedFiles(),
+				})
+				provider.postMessageToWebview({
+					type: "fileRestoreResult",
+					fileRestoreResult: {
+						kind: "deleted",
+						relativePath,
+						success: true,
+					},
+				})
+			} catch (err) {
+				const error = err instanceof Error ? err.message : String(err)
+				provider.log(
+					`[webviewMessageHandler] Failed to restore deleted file ${relativePath}: ${error}`,
+				)
+				provider.postMessageToWebview({
+					type: "fileRestoreResult",
+					fileRestoreResult: {
+						kind: "deleted",
+						relativePath,
+						success: false,
+						error,
+					},
+				})
+			}
+			break
+		}
+
+		case "restoreFileToOriginal": {
+			const task = provider.getCurrentTask()
+			const relativePath = message.text
+			if (!task || !relativePath) {
+				break
+			}
+			try {
+				await task.restoreFileToOriginal(relativePath)
+				provider.postMessageToWebview({
+					type: "fileRestoreResult",
+					fileRestoreResult: {
+						kind: "modified",
+						relativePath,
+						success: true,
+					},
+				})
+			} catch (err) {
+				const error = err instanceof Error ? err.message : String(err)
+				provider.log(
+					`[webviewMessageHandler] Failed to restore file ${relativePath} to original: ${error}`,
+				)
+				provider.postMessageToWebview({
+					type: "fileRestoreResult",
+					fileRestoreResult: {
+						kind: "modified",
+						relativePath,
+						success: false,
+						error,
+					},
+				})
+			}
+			break
+		}
 
 		default:
 			break

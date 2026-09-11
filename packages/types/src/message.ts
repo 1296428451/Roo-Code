@@ -161,6 +161,7 @@ export const clineSays = [
 	"mcp_server_response",
 	"subtask_result",
 	"checkpoint_saved",
+	"deleted_file",
 	"rooignore_error",
 	"diff_error",
 	"condense_context",

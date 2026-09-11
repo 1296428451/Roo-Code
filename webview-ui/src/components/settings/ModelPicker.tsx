@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react"
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { Trans } from "react-i18next"
-import { ChevronsUpDown, Check, X, Info } from "lucide-react"
+import { ChevronsUpDown, Check, X, Info, RotateCw } from "lucide-react"
 
 import { type ProviderSettings, type ModelInfo, type OrganizationAllowList, isRetiredProvider } from "@roo-code/types"
 
@@ -65,6 +65,8 @@ interface ModelPickerProps {
 	displayTransform?: (value: unknown) => string
 	/** Callback when model changes - useful for side effects like clearing related fields */
 	onModelChange?: (modelId: string) => void
+	/** Optional manual refetch — renders an inline button in the same row as the dropdown. */
+	refetchModels?: () => void
 }
 
 export const ModelPicker = ({
@@ -83,6 +85,7 @@ export const ModelPicker = ({
 	valueTransform,
 	displayTransform,
 	onModelChange,
+	refetchModels,
 }: ModelPickerProps) => {
 	const { t } = useAppTranslation()
 
@@ -209,76 +212,89 @@ export const ModelPicker = ({
 		<>
 			<div>
 				<label className="block font-medium mb-1">{label ?? t("settings:modelPicker.label")}</label>
-				<Popover open={open} onOpenChange={onOpenChange}>
-					<PopoverTrigger asChild>
-						<Button
-							variant="combobox"
-							role="combobox"
-							aria-expanded={open}
-							className="w-full justify-between"
-							data-testid="model-picker-button">
-							<div className="truncate">{displayValue ?? t("settings:common.select")}</div>
-							<ChevronsUpDown className="opacity-50" />
-						</Button>
-					</PopoverTrigger>
-					<PopoverContent className="p-0 w-[var(--radix-popover-trigger-width)]">
-						<Command>
-							<div className="relative">
-								<CommandInput
-									ref={searchInputRef}
-									value={searchValue}
-									onValueChange={setSearchValue}
-									placeholder={t("settings:modelPicker.searchPlaceholder")}
-									className="h-9 mr-4"
-									data-testid="model-input"
-								/>
-								{searchValue.length > 0 && (
-									<div className="absolute right-2 top-0 bottom-0 flex items-center justify-center">
-										<X
-											className="text-vscode-input-foreground opacity-50 hover:opacity-100 size-4 p-0.5 cursor-pointer"
-											onClick={onClearSearch}
-										/>
-									</div>
-								)}
-							</div>
-							<CommandList>
-								<CommandEmpty>
-									{searchValue && (
-										<div className="py-2 px-1 text-sm">
-											{t("settings:modelPicker.noMatchFound")}
+				<div className="flex items-center gap-1">
+					<Popover open={open} onOpenChange={onOpenChange}>
+						<PopoverTrigger asChild>
+							<Button
+								variant="combobox"
+								role="combobox"
+								aria-expanded={open}
+								className="w-full justify-between"
+								data-testid="model-picker-button">
+								<div className="truncate">{displayValue ?? t("settings:common.select")}</div>
+								<ChevronsUpDown className="opacity-50" />
+							</Button>
+						</PopoverTrigger>
+						<PopoverContent className="p-0 w-[var(--radix-popover-trigger-width)]">
+							<Command>
+								<div className="relative">
+									<CommandInput
+										ref={searchInputRef}
+										value={searchValue}
+										onValueChange={setSearchValue}
+										placeholder={t("settings:modelPicker.searchPlaceholder")}
+										className="h-9 mr-4"
+										data-testid="model-input"
+									/>
+									{searchValue.length > 0 && (
+										<div className="absolute right-2 top-0 bottom-0 flex items-center justify-center">
+											<X
+												className="text-vscode-input-foreground opacity-50 hover:opacity-100 size-4 p-0.5 cursor-pointer"
+												onClick={onClearSearch}
+											/>
 										</div>
 									)}
-								</CommandEmpty>
-								<CommandGroup>
-									{modelIds.map((model) => (
-										<CommandItem
-											key={model}
-											value={model}
-											onSelect={onSelect}
-											data-testid={`model-option-${model}`}>
-											<span className="truncate" title={model}>
-												{model}
-											</span>
-											<Check
-												className={cn(
-													"size-4 p-0.5 ml-auto",
-													model === displayValue ? "opacity-100" : "opacity-0",
-												)}
-											/>
-										</CommandItem>
-									))}
-								</CommandGroup>
-							</CommandList>
-							{searchValue && !modelIds.includes(searchValue) && (
-								<div className="p-1 border-t border-vscode-input-border">
-									<CommandItem data-testid="use-custom-model" value={searchValue} onSelect={onSelect}>
-										{t("settings:modelPicker.useCustomModel", { modelId: searchValue })}
-									</CommandItem>
 								</div>
-							)}
-						</Command>
-					</PopoverContent>
-				</Popover>
+								<CommandList>
+									<CommandEmpty>
+										{searchValue && (
+											<div className="py-2 px-1 text-sm">
+												{t("settings:modelPicker.noMatchFound")}
+											</div>
+										)}
+									</CommandEmpty>
+									<CommandGroup>
+										{modelIds.map((model) => (
+											<CommandItem
+												key={model}
+												value={model}
+												onSelect={onSelect}
+												data-testid={`model-option-${model}`}>
+												<span className="truncate" title={model}>
+													{model}
+												</span>
+												<Check
+													className={cn(
+														"size-4 p-0.5 ml-auto",
+														model === displayValue ? "opacity-100" : "opacity-0",
+													)}
+												/>
+											</CommandItem>
+										))}
+									</CommandGroup>
+								</CommandList>
+								{searchValue && !modelIds.includes(searchValue) && (
+									<div className="p-1 border-t border-vscode-input-border">
+										<CommandItem data-testid="use-custom-model" value={searchValue} onSelect={onSelect}>
+											{t("settings:modelPicker.useCustomModel", { modelId: searchValue })}
+										</CommandItem>
+									</div>
+								)}
+							</Command>
+						</PopoverContent>
+					</Popover>
+					{refetchModels && (
+						<Button
+							variant="outline"
+							size="icon"
+							onClick={refetchModels}
+							title={t("settings:providers.refreshModels.label")}
+							aria-label={t("settings:providers.refreshModels.label")}
+							data-testid="model-picker-refresh">
+							<RotateCw className="size-4" />
+						</Button>
+					)}
+				</div>
 			</div>
 			{errorMessage && <ApiErrorMessage errorMessage={errorMessage} />}
 			{selectedModelInfo?.deprecated && (

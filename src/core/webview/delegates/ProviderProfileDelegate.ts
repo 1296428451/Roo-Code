@@ -184,12 +184,9 @@ export class ProviderProfileDelegate {
 			const id = await this.providerSettingsManager.saveConfig(name, providerSettings)
 
 			if (activate) {
-				const { mode } = await this.provider.getState()
-
 				await Promise.all([
 					this.provider.updateGlobalState("listApiConfigMeta", await this.providerSettingsManager.listConfig()),
 					this.provider.updateGlobalState("currentApiConfigName", name),
-					this.providerSettingsManager.setModeConfig(mode, id),
 					this.contextProxy.setProviderSettings(providerSettings),
 				])
 
@@ -268,7 +265,12 @@ export class ProviderProfileDelegate {
 	) {
 		const { name, id, ...providerSettings } = await this.providerSettingsManager.activateProfile(args)
 
-		const persistModeConfig = options?.persistModeConfig ?? true
+		// Default `persistModeConfig` to `false` so that merely selecting a
+		// different profile in the dropdown does NOT also overwrite the
+		// current mode's bound API configuration. Mode <-> profile binding
+		// should be managed explicitly (e.g. via handleModeSwitch when the
+		// user changes mode), not as a side effect of profile selection.
+		const persistModeConfig = options?.persistModeConfig ?? false
 		const persistTaskHistory = options?.persistTaskHistory ?? true
 
 		await Promise.all([

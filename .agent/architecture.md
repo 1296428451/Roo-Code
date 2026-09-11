@@ -1,6 +1,6 @@
 # Roo-Code 项目架构地图
 
-> 最后更新: 2026-04-05
+> 最后更新: 2026-09-11
 > 项目: [Roo-Code](https://github.com/RooVetCode/Roo-Code) - VS Code AI 编程助手扩展
 
 ---
@@ -225,7 +225,14 @@ Roo-Code/
 
 `src/core/assistant-message/index.ts` -> 助手消息处理
 `src/core/assistant-message/NativeToolCallParser.ts` -> `NativeToolCallParser` # 原生工具调用解析
+  - `parseToolCall()` -> 完整工具调用解析，按工具名 switch 构造类型化 `nativeArgs`
+  - `createPartialToolUse()` -> 流式部分解析（partial-json），同样按工具名 switch 构造部分 `nativeArgs`
+  - `startStreamingToolCall()` / `processStreamingChunk()` / `finalizeStreamingToolCall()` -> 流式工具调用状态机
+  - **关键约束**: 两处 switch 必须覆盖 `shared/tools.ts` 中 `NativeToolArgs` 定义的所有核心工具。
+    若新增工具漏加 case，`nativeArgs` 为 undefined → `parseToolCall` 抛错返回 null →
+    `presentAssistantMessage` 报 "missing nativeArgs" 错误（2026-09-11 修复 delete_file 遗漏）
 `src/core/assistant-message/presentAssistantMessage.ts` -> `presentAssistantMessage()` # 展示助手消息
+  - 对 `!block.nativeArgs` 的已知工具调用短路，推送结构化 tool_result 错误（不执行工具）
 `src/core/assistant-message/types.ts` -> 助手消息类型
 
 #### 2.16 任务持久化

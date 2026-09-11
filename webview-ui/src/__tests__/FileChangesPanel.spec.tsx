@@ -1,7 +1,8 @@
 import React from "react"
-import { fireEvent, render, screen } from "@/utils/test-utils"
+import { act, fireEvent, render, screen } from "@/utils/test-utils"
 import type { ClineMessage } from "@roo-code/types"
 import { TranslationProvider } from "@/i18n/__mocks__/TranslationContext"
+import { ExtensionStateContextProvider } from "@src/context/ExtensionStateContext"
 import FileChangesPanel from "../components/chat/FileChangesPanel"
 
 const mockPostMessage = vi.fn()
@@ -15,9 +16,12 @@ vi.mock("@src/utils/vscode", () => ({
 // Mock i18n to return readable header with count
 vi.mock("react-i18next", () => ({
 	useTranslation: () => ({
-		t: (key: string, opts?: { count?: number }) => {
+		t: (key: string, opts?: { count?: number; deletedCount?: number }) => {
 			if (key === "chat:fileChangesInConversation.header" && opts?.count != null) {
 				return `${opts.count} file(s) changed in this conversation`
+			}
+			if (key === "chat:fileChangesInConversation.headerWithDeleted") {
+				return `${opts?.count} file(s) changed (${opts?.deletedCount} deleted, recoverable)`
 			}
 			return key
 		},
@@ -67,9 +71,22 @@ function createFileEditMessage(
 function renderPanel(messages: ClineMessage[] | undefined) {
 	return render(
 		<TranslationProvider>
-			<FileChangesPanel clineMessages={messages} />
+			<ExtensionStateContextProvider>
+				<FileChangesPanel clineMessages={messages} />
+			</ExtensionStateContextProvider>
 		</TranslationProvider>,
 	)
+}
+
+// Simulate the extension broadcasting the current trash list to the webview
+function broadcastDeletedFiles(deletedFiles: { relativePath: string; trashedAt: number; size: number }[]) {
+	act(() => {
+		window.dispatchEvent(
+			new MessageEvent("message", {
+				data: { type: "deletedFilesUpdated", deletedFiles },
+			}),
+		)
+	})
 }
 
 describe("FileChangesPanel", () => {
@@ -195,5 +212,36 @@ describe("FileChangesPanel", () => {
 
 		expect(screen.getByTestId("total-added")).toHaveTextContent("+5")
 		expect(screen.getByTestId("total-removed")).toHaveTextContent("-6")
+	})
+
+	it("renders deleted files from extension state even when there are no file edits", () => {
+		renderPanel([])
+		broadcastDeletedFiles([{ relativePath: "src/old.ts", trashedAt: Date.now(), size: 10 }])
+
+		expect(screen.getByText("0 file(s) changed (1 deleted, recoverable)")).toBeInTheDocument()
+		fireEvent.click(screen.getByText("0 file(s) changed (1 deleted, recoverable)").closest("button")!)
+		const row = screen.getByTestId("deleted-file-row")
+		expect(row).toHaveTextContent("src/old.ts")
+	})
+
+	it("shows deleted files alongside modified files and counts them in the header", () => {
+		const messages = [createFileEditMessage("src/foo.ts", "diff")]
+		renderPanel(messages)
+		broadcastDeletedFiles([{ relativePath: "src/old.ts", trashedAt: Date.now(), size: 10 }])
+
+		expect(screen.getByText("1 file(s) changed (1 deleted, recoverable)")).toBeInTheDocument()
+		fireEvent.click(screen.getByText("1 file(s) changed (1 deleted, recoverable)").closest("button")!)
+		expect(screen.getByTestId("accordian-path")).toHaveTextContent("src/foo.ts")
+		expect(screen.getByTestId("deleted-file-row")).toHaveTextContent("src/old.ts")
+	})
+
+	it("clicking restore on a deleted file posts restoreDeletedFile with the relative path", () => {
+		renderPanel([])
+		broadcastDeletedFiles([{ relativePath: "src/old.ts", trashedAt: Date.now(), size: 10 }])
+
+		fireEvent.click(screen.getByText("0 file(s) changed (1 deleted, recoverable)").closest("button")!)
+		fireEvent.click(screen.getByTestId("restore-deleted-file-btn"))
+
+		expect(mockPostMessage).toHaveBeenCalledWith({ type: "restoreDeletedFile", text: "src/old.ts" })
 	})
 })

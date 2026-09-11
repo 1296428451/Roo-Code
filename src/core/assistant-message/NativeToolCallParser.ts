@@ -627,6 +627,14 @@ export class NativeToolCallParser {
 				}
 				break
 
+			case "delete_file":
+				if (partialArgs.path !== undefined) {
+					nativeArgs = {
+						path: partialArgs.path,
+					}
+				}
+				break
+
 			case "new_task":
 				if (partialArgs.mode !== undefined || partialArgs.message !== undefined) {
 					nativeArgs = {
@@ -976,6 +984,14 @@ export class NativeToolCallParser {
 					}
 					break
 
+				case "delete_file":
+					if (args.path !== undefined) {
+						nativeArgs = {
+							path: args.path,
+						} as NativeArgsFor<TName>
+					}
+					break
+	
 				case "new_task":
 					if (args.mode !== undefined && args.message !== undefined) {
 						nativeArgs = {

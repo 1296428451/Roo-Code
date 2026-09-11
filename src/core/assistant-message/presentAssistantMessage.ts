@@ -19,6 +19,7 @@ import { writeToFileTool } from "../tools/WriteToFileTool"
 import { editTool } from "../tools/EditTool"
 import { searchReplaceTool } from "../tools/SearchReplaceTool"
 import { editFileTool } from "../tools/EditFileTool"
+import { deleteFileTool } from "../tools/DeleteFileTool"
 import { applyPatchTool } from "../tools/ApplyPatchTool"
 import { searchFilesTool } from "../tools/SearchFilesTool"
 import { executeCommandTool } from "../tools/ExecuteCommandTool"
@@ -348,6 +349,8 @@ export async function presentAssistantMessage(cline: Task) {
 						return `[${block.name} for '${block.params.file_path}']`
 					case "edit_file":
 						return `[${block.name} for '${block.params.file_path}']`
+					case "delete_file":
+						return `[${block.name} for '${block.params.path}']`
 					case "apply_patch":
 						return `[${block.name}]`
 					case "list_files":
@@ -692,6 +695,14 @@ export async function presentAssistantMessage(cline: Task) {
 				case "edit_file":
 					await checkpointSaveAndMark(cline)
 					await editFileTool.handle(cline, block as ToolUse<"edit_file">, {
+						askApproval,
+						handleError,
+						pushToolResult,
+					})
+					break
+				case "delete_file":
+					await checkpointSaveAndMark(cline)
+					await deleteFileTool.handle(cline, block as ToolUse<"delete_file">, {
 						askApproval,
 						handleError,
 						pushToolResult,

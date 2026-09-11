@@ -41,3 +41,11 @@
 - defense/risk: 双缓存机制 — 异步缓存供 `list-files.ts` 使用，同步缓存由 `SettingsStore.loadAll()` 初始化后供 `scanner.ts` 和 `file-watcher.ts` 使用
 
 ---
+
+### [2026-09-11] 原生工具调用解析器漏加工具分支导致 "missing nativeArgs" 错误
+
+- symptom/intent: AI 调用 `delete_file` 工具时始终失败，返回 "Invalid tool call for 'delete_file': missing nativeArgs"，其他工具（read_file、edit_file 等）均正常。
+- root cause/logic: 原生工具调用解析器（NativeToolCallParser）内部有两处按工具名 switch 构造类型化参数（nativeArgs）的逻辑：一处用于完整调用解析，一处用于流式部分解析。`delete_file` 在类型映射（NativeToolArgs）、工具 schema、工具组中均已注册，但这两处 switch 都缺少对应分支，落入 default 后 nativeArgs 保持 undefined，完整解析触发 fail-fast 抛错返回 null，最终在消息呈现层被判定为"已知工具但缺少 nativeArgs"而短路报错。
+- defense/risk: 新增核心工具时必须同步修改解析器的两处 switch（完整解析 + 流式部分解析），并补充 parseToolCall / processStreamingChunk / finalizeStreamingToolCall 三层回归测试。排查此类"某工具单独失败"问题时，优先检查解析器 switch 是否覆盖该工具，而非工具实现本身。
+
+---

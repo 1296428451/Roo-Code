@@ -46,7 +46,10 @@ export const handleApiConfigOperations = async (ctx: import("../webviewMessageHa
 		case "loadApiConfiguration":
 			if (message.text) {
 				try {
-					await provider.activateProviderProfile({ name: message.text })
+					await provider.activateProviderProfile(
+						{ name: message.text },
+						{ persistModeConfig: message.persistModeConfig === true },
+					)
 				} catch (error) {
 					provider.log(`Error load api configuration: ${error}`)
 					vscode.window.showErrorMessage(t("common:errors.load_api_config"))
@@ -57,7 +60,10 @@ export const handleApiConfigOperations = async (ctx: import("../webviewMessageHa
 		case "loadApiConfigurationById":
 			if (message.text) {
 				try {
-					await provider.activateProviderProfile({ id: message.text })
+					await provider.activateProviderProfile(
+						{ id: message.text },
+						{ persistModeConfig: message.persistModeConfig === true },
+					)
 				} catch (error) {
 					provider.log(`Error load api configuration by ID: ${error}`)
 					vscode.window.showErrorMessage(t("common:errors.load_api_config"))

@@ -431,6 +431,17 @@ export const ChatRowContent = ({
 		)
 
 		switch (tool.tool as string) {
+			case "deleteFile":
+				return (
+					<div style={headerStyle}>
+						{toolIcon("trash")}
+						<span style={{ fontWeight: "bold" }}>
+							{tool.isOutsideWorkspace
+								? t("chat:fileOperations.wantsToDeleteOutsideWorkspace", { path: tool.path })
+								: t("chat:fileOperations.wantsToDelete", { path: tool.path })}
+						</span>
+					</div>
+				)
 			case "editedExistingFile":
 			case "appliedDiff":
 			case "newFileCreated":

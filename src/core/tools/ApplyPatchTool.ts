@@ -293,7 +293,12 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 		}
 
 		try {
-			await fs.unlink(absolutePath)
+			// Move the file to the per-task .trash directory instead of unlinking it,
+			// so the user can recover it from the UI (see FileChangesPanel).
+			const moved = await task.moveDeletedFileToTrash(relPath)
+			if (!moved) {
+				throw new Error("file not found")
+			}
 		} catch (error) {
 			const errorMessage = `Failed to delete file '${relPath}': ${error instanceof Error ? error.message : String(error)}`
 			await task.say("error", errorMessage)
@@ -449,9 +454,9 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 				await fs.writeFile(moveAbsolutePath, newContent, "utf8")
 			}
 
-			// Delete the original file
+			// Delete the original file (via trash so the user can recover it later).
 			try {
-				await fs.unlink(absolutePath)
+				await task.moveDeletedFileToTrash(relPath)
 			} catch (error) {
 				console.error(`Failed to delete original file after move: ${error}`)
 			}

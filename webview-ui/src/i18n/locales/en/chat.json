@@ -24,7 +24,11 @@
 	"unpin": "Unpin",
 	"pin": "Pin",
 	"fileChangesInConversation": {
-		"header": "{{count}} file(s) changed in this conversation"
+		"header": "{{count}} file(s) changed in this conversation",
+		"headerWithDeleted": "{{count}} file(s) changed in this conversation ({{deletedCount}} deleted, recoverable)",
+		"restore": "Restore",
+		"restoring": "Restoring…",
+		"restoreOriginalTooltip": "Restore this file to its original content from the start of the task"
 	},
 	"retry": {
 		"title": "Retry",
@@ -224,6 +228,8 @@
 		"wantsToReadAndXMore": "Roo wants to read this file and {{count}} more",
 		"wantsToReadOutsideWorkspace": "Roo wants to read this file outside of the workspace",
 		"didRead": "Roo read this file",
+		"wantsToDelete": "Roo wants to delete this file: {{path}}",
+		"wantsToDeleteOutsideWorkspace": "Roo wants to delete this file outside of the workspace: {{path}}",
 		"wantsToEdit": "Roo wants to edit this file",
 		"wantsToEditOutsideWorkspace": "Roo wants to edit this file outside of the workspace",
 		"wantsToEditProtected": "Roo wants to edit a protected configuration file",

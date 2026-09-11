@@ -10,7 +10,6 @@ import {
 
 import { vscode } from "@src/utils/vscode"
 import { useAppTranslation } from "@src/i18n/TranslationContext"
-import { Button } from "@src/components/ui"
 
 import { inputEventTransform } from "../transforms"
 import { ModelPicker } from "../ModelPicker"
@@ -33,6 +32,7 @@ export const Requesty = ({
 	apiConfiguration,
 	setApiConfigurationField,
 	routerModels,
+	refetchRouterModels,
 	organizationAllowList,
 	modelValidationError,
 	uriScheme,
@@ -126,16 +126,6 @@ export const Requesty = ({
 					</div>
 				</VSCodeTextField>
 			)}
-			<Button
-				variant="outline"
-				onClick={() => {
-					vscode.postMessage({ type: "requestRouterModels", values: { provider: "requesty", refresh: true } })
-				}}>
-				<div className="flex items-center gap-2">
-					<span className="codicon codicon-refresh" />
-					{t("settings:providers.refreshModels.label")}
-				</div>
-			</Button>
 			<ModelPicker
 				apiConfiguration={apiConfiguration}
 				setApiConfigurationField={setApiConfigurationField}
@@ -147,6 +137,13 @@ export const Requesty = ({
 				organizationAllowList={organizationAllowList}
 				errorMessage={modelValidationError}
 				simplifySettings={simplifySettings}
+				refetchModels={() => {
+					vscode.postMessage({
+						type: "requestRouterModels",
+						values: { provider: "requesty", refresh: true },
+					})
+					refetchRouterModels()
+				}}
 			/>
 		</>
 	)

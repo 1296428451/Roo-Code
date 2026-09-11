@@ -35,6 +35,7 @@ export interface ExtensionStateContextType extends ExtensionState {
 	theme: any
 	mcpServers: McpServer[]
 	currentCheckpoint?: string
+	deletedFiles: { relativePath: string; trashedAt: number; size: number }[]
 	currentTaskTodos?: TodoItem[] // Initial todos for the current task
 	filePaths: string[]
 	openedTabs: Array<{ label: string; isActive: boolean; path?: string }>
@@ -258,6 +259,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 	const [commands, setCommands] = useState<Command[]>([])
 	const [mcpServers, setMcpServers] = useState<McpServer[]>([])
 	const [currentCheckpoint, setCurrentCheckpoint] = useState<string>()
+	const [deletedFiles, setDeletedFiles] = useState<{ relativePath: string; trashedAt: number; size: number }[]>([])
 	const [extensionRouterModels, setExtensionRouterModels] = useState<RouterModels | undefined>(undefined)
 	const [alwaysAllowFollowupQuestions, setAlwaysAllowFollowupQuestions] = useState(false) // Add state for follow-up questions auto-approve
 	const [followupAutoApproveTimeoutMs, setFollowupAutoApproveTimeoutMs] = useState<number | undefined>(undefined) // Will be set from global settings
@@ -392,6 +394,10 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					setCurrentCheckpoint(message.text)
 					break
 				}
+				case "deletedFilesUpdated": {
+					setDeletedFiles(message.deletedFiles ?? [])
+					break
+				}
 				case "listApiConfig": {
 					setListApiConfigMeta(message.listApiConfig ?? [])
 					break
@@ -459,6 +465,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		theme,
 		mcpServers,
 		currentCheckpoint,
+		deletedFiles,
 		filePaths,
 		openedTabs,
 		commands,
