@@ -1,11 +1,9 @@
-import EventEmitter from "events"
+import * as vscode from "vscode"
 
 import { Anthropic } from "@anthropic-ai/sdk"
-import * as vscode from "vscode"
 
 import {
 	type TaskProviderLike,
-	type TaskProviderEvents,
 	type ProviderSettings,
 	type ProviderSettingsEntry,
 	type CreateTaskOptions,
@@ -17,165 +15,32 @@ import {
 	type ExtensionMessage,
 	type ExtensionState,
 } from "@roo-code/types"
+
 import { type AggregatedCosts } from "./aggregateTaskCosts"
 
 import { Package } from "../../shared/package"
 import { Mode } from "../../shared/modes"
-import { EMBEDDING_MODEL_PROFILES } from "../../shared/embeddingModels"
-
-import WorkspaceTracker from "../../integrations/workspace/WorkspaceTracker"
-
 import { McpHub } from "../../services/mcp/McpHub"
-import { CodeIndexManager } from "../../services/code-index/manager"
-import { SkillsManager } from "../../services/skills/SkillsManager"
 
-import { getWorkspacePath } from "../../utils/path"
-
-import { ContextProxy } from "../config/ContextProxy"
-import { ProviderSettingsManager } from "../config/ProviderSettingsManager"
-import { CustomModesManager } from "../config/CustomModesManager"
 import { Task } from "../task/Task"
 
-import type { ClineMessage } from "@roo-code/types"
-import { TaskHistoryStore } from "../task-persistence"
 import { delegateParentAndOpenChild, reopenParentFromDelegation } from "./delegation"
-import { PendingEditDelegate } from "./delegates/PendingEditDelegate"
-import { ProviderStateDelegate } from "./delegates/ProviderStateDelegate"
-import { ProviderProfileDelegate } from "./delegates/ProviderProfileDelegate"
-import { TaskHistoryDelegate } from "./delegates/TaskHistoryDelegate"
-import { WebviewLifecycleDelegate } from "./delegates/WebviewLifecycleDelegate"
-import { TaskStackDelegate } from "./delegates/TaskStackDelegate"
-import { DisposeDelegate } from "./delegates/DisposeDelegate"
 import { StaticDelegate } from "./delegates/StaticDelegate"
-import { McpDelegate } from "./delegates/McpDelegate"
+import { ClineProviderBase } from "./ClineProviderBase"
 
-export type ClineProviderEvents = {
-	clineCreated: [cline: Task]
-}
-
-export class ClineProvider
-	extends EventEmitter<TaskProviderEvents>
-	implements vscode.WebviewViewProvider, TaskProviderLike
-{
+export class ClineProvider extends ClineProviderBase implements vscode.WebviewViewProvider, TaskProviderLike {
 	public static readonly sideBarId = `${Package.name}.SidebarProvider`
 	public static readonly tabPanelId = `${Package.name}.TabPanelProvider`
 	public static activeInstances: Set<ClineProvider> = new Set()
-
-	// Shared state exposed for delegate access
-	public disposables: vscode.Disposable[] = []
-	public webviewDisposables: vscode.Disposable[] = []
-	public view?: vscode.WebviewView | vscode.WebviewPanel
-	public clineStack: Task[] = []
-	public codeIndexStatusSubscription?: vscode.Disposable
-	public codeIndexManager?: CodeIndexManager
-	public _workspaceTracker?: WorkspaceTracker
-	public mcpHub?: McpHub
-	public skillsManager?: SkillsManager
-	public taskCreationCallback: (task: Task) => void
-	public taskEventListeners: Map<Task, Array<() => void>> = new Map()
-	public currentWorkspacePath: string | undefined
-	public _disposed = false
-
-	public recentTasksCache?: string[]
-	public readonly taskHistoryStore: TaskHistoryStore
-	public taskHistoryStoreInitialized = false
-	public globalStateWriteThroughTimer: ReturnType<typeof setTimeout> | null = null
-
-	public clineMessagesSeq = 0
-
-	public isViewLaunched = false
-	public mcpHubInitializationPromise: Promise<void>
-	public settingsImportedAt?: number
-	public readonly latestAnnouncementId = "may-2026-final-roo-code-release"
-	public readonly providerSettingsManager: ProviderSettingsManager
-	public readonly customModesManager: CustomModesManager
-
-	// Delegates
-	private readonly pendingEditDelegate: PendingEditDelegate
-	private readonly stateDelegate: ProviderStateDelegate
-	private readonly profileDelegate: ProviderProfileDelegate
-	private readonly taskHistoryDelegate: TaskHistoryDelegate
-	private readonly webviewLifecycleDelegate: WebviewLifecycleDelegate
-	private readonly taskStackDelegate: TaskStackDelegate
-	private readonly disposeDelegate: DisposeDelegate
-	private readonly mcpDelegate: McpDelegate
-
-	constructor(
-		readonly context: vscode.ExtensionContext,
-		readonly outputChannel: vscode.OutputChannel,
-		public readonly renderContext: "sidebar" | "editor" = "sidebar",
-		public readonly contextProxy: ContextProxy,
-	) {
-		super()
-		this.currentWorkspacePath = getWorkspacePath()
-
-		this.pendingEditDelegate = new PendingEditDelegate(this)
-		this.stateDelegate = new ProviderStateDelegate(this)
-		this.profileDelegate = new ProviderProfileDelegate(this)
-		this.taskHistoryDelegate = new TaskHistoryDelegate(this)
-		this.webviewLifecycleDelegate = new WebviewLifecycleDelegate(this)
-		this.taskStackDelegate = new TaskStackDelegate(this)
-		this.disposeDelegate = new DisposeDelegate(this)
-		this.mcpDelegate = new McpDelegate(this)
-
-		this.settingsImportedAt = context.globalState.get<number>("settingsImportedAt")
-
-		if (!this.settingsImportedAt) {
-			this.ensureSettingsImportedAtFromConfig()
-				.then(async (updated) => {
-					if (updated) {
-						await this.hydrateProviderProfileFromConfig()
-						void this.postStateToWebview()
-					}
-				})
-				.catch((error) => {
-					this.log(`Failed to check config file: ${error}`)
-				})
-		}
-
-		ClineProvider.activeInstances.add(this)
-
-		this.updateGlobalState("codebaseIndexModels", EMBEDDING_MODEL_PROFILES)
-
-		this.taskHistoryStore = new TaskHistoryStore(context.globalStorageUri.fsPath)
-		this.initializeTaskHistoryStore()
-
-		this.providerSettingsManager = new ProviderSettingsManager(this.context)
-		this.customModesManager = new CustomModesManager(this.context)
-
-		this.skillsManager = new SkillsManager(this)
-		this.skillsManager.initialize().catch((error) => {
-			this.log(`Failed to initialize skills manager: ${error}`)
-		})
-
-		this.mcpHubInitializationPromise = this.mcpDelegate.initializeMcpHub()
-
-		this.taskCreationCallback = (task: Task) => {
-			;(this as unknown as EventEmitter<ClineProviderEvents>).emit("clineCreated", task)
-		}
-	}
-
-	public log(message: string) {
-		console.log(`[ClineProvider] ${message}`)
-		this.outputChannel.appendLine(`[ClineProvider] ${message}`)
-	}
 
 	// =============================================================================
 	// Profile & Provider (delegated to ProviderProfileDelegate)
 	// =============================================================================
 
-	public async ensureSettingsImportedAtFromConfig(): Promise<boolean> {
-		return this.profileDelegate.ensureSettingsImportedAtFromConfig()
-	}
-
-	public async hydrateProviderProfileFromConfig(): Promise<boolean> {
-		return this.profileDelegate.hydrateProviderProfileFromConfig()
-	}
-
-	public updateTaskApiHandlerIfNeeded(
+	public async updateTaskApiHandlerIfNeeded(
 		providerSettings: ProviderSettings,
 		options: { forceRebuild?: boolean } = {},
-	): void {
+	): Promise<void> {
 		this.profileDelegate.updateTaskApiHandlerIfNeeded(providerSettings, options)
 	}
 
@@ -274,14 +139,6 @@ export class ClineProvider
 	// State Management (delegated to ProviderStateDelegate)
 	// =============================================================================
 
-	async refreshWorkspace() {
-		await this.stateDelegate.refreshWorkspace()
-	}
-
-	async postStateToWebview() {
-		await this.stateDelegate.postStateToWebview()
-	}
-
 	async postStateToWebviewWithoutTaskHistory(): Promise<void> {
 		await this.stateDelegate.postStateToWebviewWithoutTaskHistory()
 	}
@@ -296,6 +153,10 @@ export class ClineProvider
 
 	async getState() {
 		return this.stateDelegate.getState()
+	}
+
+	async refreshWorkspace(): Promise<void> {
+		await this.stateDelegate.refreshWorkspace()
 	}
 
 	// =============================================================================
@@ -355,10 +216,6 @@ export class ClineProvider
 		return this.taskHistoryDelegate.deleteTaskFromState(id)
 	}
 
-	async initializeTaskHistoryStore(): Promise<void> {
-		return this.taskHistoryDelegate.initializeTaskHistoryStore()
-	}
-
 	async resetState() {
 		return this.taskHistoryDelegate.resetState()
 	}
@@ -398,8 +255,8 @@ export class ClineProvider
 
 	async resolveWebviewView(
 		webviewView: vscode.WebviewView | vscode.WebviewPanel,
-		_context: vscode.WebviewViewResolveContext<unknown>,
-		_token: vscode.CancellationToken,
+		_context?: vscode.WebviewViewResolveContext<unknown>,
+		_token?: vscode.CancellationToken,
 	): Promise<void> {
 		await this.webviewLifecycleDelegate.resolveWebviewView(webviewView, _context, _token)
 	}
@@ -444,10 +301,6 @@ export class ClineProvider
 		return this.taskStackDelegate.getCurrentTaskStack()
 	}
 
-	public getCurrentTask(): Task | undefined {
-		return this.taskStackDelegate.getCurrentTask()
-	}
-
 	public getRecentTasks(): string[] {
 		return this.taskHistoryDelegate.getRecentTasks()
 	}
@@ -471,6 +324,13 @@ export class ClineProvider
 
 	async clearTask(): Promise<void> {
 		await this.taskStackDelegate.clearTask()
+	}
+
+	/**
+	 * Close every open task (main task and any sub tasks) and return to the main UI.
+	 */
+	async clearAllTasks(): Promise<void> {
+		await this.taskStackDelegate.clearAllTasks()
 	}
 
 	async resumeTask(taskId: string): Promise<void> {
@@ -503,15 +363,16 @@ export class ClineProvider
 
 	public static async handleCodeAction(
 		action: CodeActionId | CodeActionName,
-		context?: { taskId?: string; messageTs?: number },
+		promptType?: string,
+		context?: any, // eslint-disable-line @typescript-eslint/no-explicit-any
 	): Promise<void> {
-		await StaticDelegate.handleCodeAction(action, context)
+		await StaticDelegate.handleCodeAction(action, promptType, context)
 	}
 
 	public static async handleTerminalAction(
 		action: TerminalActionId,
 		promptType?: TerminalActionPromptType,
-		context?: { taskId?: string; messageTs?: number; terminalId?: number },
+		context?: any, // eslint-disable-line @typescript-eslint/no-explicit-any
 	): Promise<void> {
 		await StaticDelegate.handleTerminalAction(action, promptType, context)
 	}
@@ -540,10 +401,6 @@ export class ClineProvider
 	// Context Proxy Wrappers
 	// =============================================================================
 
-	async updateGlobalState(key: any, value: any): Promise<void> {
-		await this.contextProxy.setValue(key, value)
-	}
-
 	async getGlobalState(key: any): Promise<any> {
 		return this.contextProxy.getValue(key)
 	}
@@ -562,41 +419,6 @@ export class ClineProvider
 
 	async setValues(values: any): Promise<void> {
 		await this.contextProxy.setValues(values)
-	}
-
-	// =============================================================================
-	// Getters
-	// =============================================================================
-
-	get workspaceTracker(): WorkspaceTracker | undefined {
-		return this._workspaceTracker
-	}
-
-	get viewLaunched(): boolean {
-		return this.isViewLaunched && !this._disposed
-	}
-
-	get messages(): ClineMessage[] {
-		return this.getCurrentTask()?.clineMessages || []
-	}
-
-	get cwd(): string {
-		return this.currentWorkspacePath || getWorkspacePath()
-	}
-
-	getSkillsManager(): SkillsManager | undefined {
-		return this.skillsManager
-	}
-
-	getCurrentWorkspaceCodeIndexManager(): CodeIndexManager | undefined {
-		return this.codeIndexManager
-	}
-
-	updateCodeIndexStatusSubscription(subscription: vscode.Disposable | undefined) {
-		if (this.codeIndexStatusSubscription) {
-			this.codeIndexStatusSubscription.dispose()
-		}
-		this.codeIndexStatusSubscription = subscription
 	}
 
 	// =============================================================================

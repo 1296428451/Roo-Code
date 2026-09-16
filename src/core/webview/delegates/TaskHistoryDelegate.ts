@@ -95,6 +95,16 @@ export class TaskHistoryDelegate {
 	}
 
 	async showTaskWithId(id: string) {
+		const current = this.provider.getCurrentTask()
+
+		// Jumping from one session to another: push the current session into the
+		// background (instead of tearing it down) so several agents run in parallel.
+		// Skipped when re-opening the task that is already in front, and when the
+		// current task has already ended.
+		if (current && current.taskId !== id && this.provider.backgroundTaskDelegate.isTaskAlive(current)) {
+			await this.provider.backgroundTaskDelegate.backgroundActiveTask()
+		}
+
 		if (id !== this.provider.getCurrentTask()?.taskId) {
 			const { historyItem } = await this.getTaskWithId(id)
 			await this.provider.createTaskWithHistoryItem(historyItem)

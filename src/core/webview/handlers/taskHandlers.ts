@@ -58,6 +58,21 @@ export const handleTaskOperations = async (ctx: HandlerContext, message: any): P
 			break
 		}
 
+		case "clearTask": {
+			// "New Task" / "Start New Task": close every open task (including sub tasks)
+			// so the webview returns to the main UI in a single step.
+			try {
+				await provider.clearTask()
+			} catch (error) {
+				provider.log(`Error clearing tasks: ${error}`)
+			} finally {
+				// `clearTask()` posts state itself for the batch case, but the webview
+				// must still be refreshed when there is no task to close.
+				await provider.postStateToWebview()
+			}
+			break
+		}
+
 		case "deleteTask": {
 			try {
 				if (message.taskId) {
@@ -145,6 +160,37 @@ export const handleTaskOperations = async (ctx: HandlerContext, message: any): P
 			break
 		}
 
+		case "backgroundActiveTask": {
+			try {
+				await provider.backgroundTaskDelegate.backgroundActiveTask()
+			} catch (error) {
+				provider.log(`Error backgrounding active task: ${error}`)
+			}
+			break
+		}
+
+		case "foregroundBackgroundTask": {
+			if (message.text) {
+				try {
+					await provider.backgroundTaskDelegate.foregroundBackgroundTask(message.text)
+				} catch (error) {
+					provider.log(`Error foregrounding background task: ${error}`)
+				}
+			}
+			break
+		}
+
+		case "stopBackgroundTask": {
+			if (message.text) {
+				try {
+					await provider.backgroundTaskDelegate.stopBackgroundTask(message.text)
+				} catch (error) {
+					provider.log(`Error stopping background task: ${error}`)
+				}
+			}
+			break
+		}
+
 		case "switchToTask": {
 			if (message.taskId) {
 				try {
@@ -204,6 +250,58 @@ export const handleTaskOperations = async (ctx: HandlerContext, message: any): P
 				} catch (error) {
 					provider.log(`Error exporting task: ${error}`)
 					vscode.window.showErrorMessage(t("common:errors.export_task"))
+				}
+			}
+			break
+		}
+
+		case "condenseTaskContextRequest": {
+			// Manual "Condense Context" from the chat UI. Task#condenseContext emits
+			// condenseTaskContextStarted / condenseTaskContextResponse itself, so the
+			// handler only has to start the work. The catch is deliberate: if the task
+			// cannot be resolved the webview would otherwise stay stuck in its
+			// "condensing" state forever (it disables sending while condensing).
+			if (message.text) {
+				try {
+					await provider.condenseTaskContext(message.text)
+				} catch (error) {
+					provider.log(`Error condensing task context: ${error}`)
+					await provider.postMessageToWebview({
+						type: "condenseTaskContextResponse",
+						text: message.text,
+					})
+				}
+			}
+			break
+		}
+
+		case "cancelAutoApproval":
+			// Abort the pending auto-approval countdown for the current task.
+			provider.getCurrentTask()?.cancelAutoApprovalTimeout()
+			break
+
+		case "terminalOperation":
+			if (message.terminalOperation) {
+				provider.getCurrentTask()?.handleTerminalOperation(message.terminalOperation)
+			}
+			break
+
+		case "getTaskWithAggregatedCosts": {
+			const taskId = message.text
+			if (taskId) {
+				try {
+					const result = await provider.getTaskWithAggregatedCosts(taskId)
+					await provider.postMessageToWebview({
+						type: "taskWithAggregatedCosts",
+						// ChatView keys aggregatedCostsMap by message.text, so echo the id back.
+						text: taskId,
+						historyItem: result.historyItem,
+						aggregatedCosts: result.aggregatedCosts,
+					})
+				} catch (error) {
+					// The webview only stores the map entry on success and has no
+					// loading state to clear, so logging is enough here.
+					provider.log(`Error getting task with aggregated costs: ${error}`)
 				}
 			}
 			break

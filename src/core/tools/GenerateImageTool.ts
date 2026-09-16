@@ -246,7 +246,9 @@ export class GenerateImageTool extends BaseTool<"generate_image"> {
 
 			const fullImagePath = path.join(task.cwd, finalPath)
 
-			let imageUri = provider?.convertToWebviewUri?.(fullImagePath) ?? vscode.Uri.file(fullImagePath).toString()
+			const fullImageUri = vscode.Uri.file(fullImagePath)
+			let imageUri =
+				provider?.convertToWebviewUri?.(fullImageUri)?.toString() ?? fullImageUri.toString()
 
 			const cacheBuster = Date.now()
 			imageUri = imageUri.includes("?") ? `${imageUri}&t=${cacheBuster}` : `${imageUri}?t=${cacheBuster}`

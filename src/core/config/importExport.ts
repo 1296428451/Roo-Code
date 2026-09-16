@@ -33,6 +33,7 @@ type ImportWithProviderOptions = ImportOptions & {
 	provider: {
 		settingsImportedAt?: number
 		postStateToWebview: () => Promise<void>
+		context?: vscode.ExtensionContext
 	}
 }
 
@@ -277,7 +278,9 @@ export const importSettingsWithFeedback = async (
 	if (result.success) {
 		const timestamp = Date.now()
 		provider.settingsImportedAt = timestamp
-		await provider.context.globalState.update("settingsImportedAt", timestamp)
+		if (provider.context) {
+			await provider.context.globalState.update("settingsImportedAt", timestamp)
+		}
 		await provider.postStateToWebview()
 
 		if (result.warnings && result.warnings.length > 0) {

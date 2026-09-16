@@ -10,8 +10,8 @@ export class WebviewLifecycleDelegate {
 
 	async resolveWebviewView(
 		webviewView: vscode.WebviewView | vscode.WebviewPanel,
-		_context: vscode.WebviewViewResolveContext<unknown>,
-		_token: vscode.CancellationToken,
+		_context?: vscode.WebviewViewResolveContext<unknown>,
+		_token?: vscode.CancellationToken,
 	): Promise<void> {
 		this.provider.view = webviewView
 

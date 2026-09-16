@@ -23,6 +23,19 @@
 	},
 	"unpin": "取消置顶",
 	"pin": "置顶",
+	"background": {
+		"title": "后台会话",
+		"runActive": "后台运行",
+		"foreground": "回到前台",
+		"stop": "停止后台任务",
+		"current": "当前",
+		"running": "运行中",
+		"needsConfirmation": "需确认",
+		"completed": "已完成",
+		"aborted": "已停止",
+		"runningCount": "{{count}} 个运行中",
+		"needsConfirmationCount": "{{count}} 个待确认"
+	},
 	"fileChangesInConversation": {
 		"header": "此对话中已更改 {{count}} 个文件",
 		"headerWithDeleted": "此对话中已更改 {{count}} 个文件（其中 {{deletedCount}} 个已删除，可恢复）",

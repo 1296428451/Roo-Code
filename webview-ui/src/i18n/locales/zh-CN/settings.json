@@ -250,7 +250,7 @@
 		},
 		"subtasks": {
 			"label": "子任务",
-			"description": "允许创建和完成子任务而无需批准"
+			"description": "允许创建子任务而无需批准"
 		},
 		"followupQuestions": {
 			"label": "问题",

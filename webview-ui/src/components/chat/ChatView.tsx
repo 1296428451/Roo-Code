@@ -40,7 +40,9 @@ import ProfileViolationWarning from "./ProfileViolationWarning"
 import { CheckpointWarning } from "./CheckpointWarning"
 import { QueuedMessages } from "./QueuedMessages"
 import { WorktreeSelector } from "./WorktreeSelector"
+import BackgroundSessions from "./BackgroundSessions"
 import FileChangesPanel from "./FileChangesPanel"
+import { PictureInPicture2 } from "lucide-react"
 import { useScrollLifecycle } from "@src/hooks/useScrollLifecycle"
 
 export interface ChatViewProps {
@@ -682,6 +684,12 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	const startNewTask = useCallback(() => {
 		setShowRetiredProviderWarning(false)
 		vscode.postMessage({ type: "clearTask" })
+	}, [])
+
+	// Send the current session to the background: it keeps running while the UI
+	// returns to the home screen so a new, independent session can be started.
+	const handleRunInBackground = useCallback(() => {
+		vscode.postMessage({ type: "backgroundActiveTask" })
 	}, [])
 
 	// Handle stop button click from textarea
@@ -1546,7 +1554,11 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		vscode.postMessage({ type: "condenseTaskContextRequest", text: taskId })
 	}
 
-	const areButtonsVisible = showScrollToBottom || primaryButtonText || secondaryButtonText || isPaused
+	const hasActionButtons = showScrollToBottom || primaryButtonText || secondaryButtonText || isPaused
+	// While a session exists the row must stay visible so the "run in background"
+	// marker next to the New Task button is reachable mid-stream, not only when
+	// the agent is waiting for an approval.
+	const areButtonsVisible = hasActionButtons || !!task
 
 	return (
 		<div
@@ -1645,8 +1657,24 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					{areButtonsVisible && (
 						<div
 							className={`flex h-9 items-center mb-1 px-[15px] ${
-								showScrollToBottom ? "opacity-100" : enableButtons ? "opacity-100" : "opacity-50"
+								// Dimming only exists to grey out the action buttons while the
+								// agent is working. When the background marker is the sole thing
+								// in the row, keep it fully opaque so it stays usable mid-stream.
+								hasActionButtons && !enableButtons && !showScrollToBottom ? "opacity-50" : "opacity-100"
 							}`}>
+							{task && (
+								<StandardTooltip content={t("chat:background.runActive")}>
+									<Button
+										variant="ghost"
+										size="icon"
+										aria-label={t("chat:background.runActive")}
+										title={t("chat:background.runActive")}
+										className="mr-1 shrink-0 text-vscode-foreground"
+										onClick={handleRunInBackground}>
+										<PictureInPicture2 className="size-3.5" />
+									</Button>
+								</StandardTooltip>
+							)}
 							{showScrollToBottom ? (
 								<>
 									<StandardTooltip content={t("chat:scrollToBottom")}>
@@ -1755,6 +1783,8 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					)}
 				</>
 			)}
+
+			<BackgroundSessions />
 
 			<QueuedMessages
 				queue={messageQueue}

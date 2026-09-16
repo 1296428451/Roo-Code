@@ -161,7 +161,11 @@ export async function checkAutoApproval({
 			return state.alwaysAllowModeSwitch === true ? { decision: "approve" } : { decision: "ask" }
 		}
 
-		if (["newTask", "finishTask"].includes(tool?.tool)) {
+		// Creating a subtask follows the "Subtasks" auto-approval setting: enabled
+		// means new tasks start without confirmation, disabled means the user is
+		// asked. Finishing a subtask never asks, control returns to the parent
+		// task automatically (see askFinishSubTaskApproval in presentAssistantMessage).
+		if (tool?.tool === "newTask") {
 			return state.alwaysAllowSubtasks === true ? { decision: "approve" } : { decision: "ask" }
 		}
 

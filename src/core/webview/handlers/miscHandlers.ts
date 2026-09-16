@@ -6,10 +6,19 @@ import { ClineProvider } from "../ClineProvider"
 import { t } from "../../../i18n"
 import { getCommand } from "../../../utils/commands"
 import { openFile } from "../../../integrations/misc/open-file"
+import { openMention } from "../../mentions"
+import { isPathOutsideWorkspace } from "../../../utils/pathUtils"
 import { Package } from "../../../shared/package"
 import { generateErrorDiagnostics } from "../diagnosticsHandler"
 import { GlobalFileNames } from "../../../shared/globalFileNames"
 import type { WebviewMessage } from "@roo-code/types"
+
+/**
+ * VSCode settings the webview is allowed to change on the user's behalf.
+ * Mirrors upstream; anything outside this allow-list is rejected so a compromised
+ * webview cannot rewrite arbitrary editor configuration.
+ */
+const ALLOWED_VSCODE_SETTINGS = new Set(["terminal.integrated.inheritEnv"])
 
 export const handleMiscOperations = async (ctx: import("../webviewMessageHandler").HandlerContext, message: WebviewMessage): Promise<void> => {
 	const { provider, updateGlobalState } = ctx
@@ -313,5 +322,95 @@ export const handleMiscOperations = async (ctx: import("../webviewMessageHandler
 			}
 			break
 		}
+
+		case "openExternal":
+			if (message.url) {
+				// Announcement/ErrorRow call preventDefault() before posting this, so
+				// failing to open the URL here leaves the link completely dead.
+				await vscode.env.openExternal(vscode.Uri.parse(message.url))
+			}
+			break
+
+		case "openMention":
+			await openMention(ctx.getCurrentCwd() ?? provider.cwd ?? "", message.text)
+			break
+
+		case "openKeyboardShortcuts": {
+			const searchQuery = message.text || ""
+			if (searchQuery) {
+				await vscode.commands.executeCommand("workbench.action.openGlobalKeybindings", searchQuery)
+			} else {
+				await vscode.commands.executeCommand("workbench.action.openGlobalKeybindings")
+			}
+			break
+		}
+
+		case "updateVSCodeSetting": {
+			const { setting, value } = message
+
+			if (setting !== undefined && value !== undefined) {
+				if (ALLOWED_VSCODE_SETTINGS.has(setting)) {
+					await vscode.workspace.getConfiguration().update(setting, value, true)
+				} else {
+					vscode.window.showErrorMessage(`Cannot update restricted VSCode setting: ${setting}`)
+				}
+			}
+			break
+		}
+
+		case "readFileContent": {
+			// FileChangesPanel requests the on-disk content of a changed file to render
+			// the "after" side of a diff. The path is echoed back verbatim because the
+			// panel keys its cache by the exact path it requested.
+			const requestPath = message.text
+			if (!requestPath) {
+				await provider.postMessageToWebview({
+					type: "fileContent",
+					fileContent: { path: requestPath ?? "", content: null, error: "No path provided" },
+				})
+				break
+			}
+
+			const cwd = ctx.getCurrentCwd() ?? provider.cwd ?? ""
+			// `/foo` is absolute as far as the webview is concerned, but path.win32 does
+			// not treat it as such — check the leading slash explicitly so POSIX-style
+			// requests are still validated on Windows instead of being joined to the cwd.
+			const isAbsolutePath = path.isAbsolute(requestPath) || requestPath.startsWith("/")
+			const absolutePath = isAbsolutePath ? requestPath : path.join(cwd, requestPath)
+
+			// Never read outside the workspace: the webview is untrusted input.
+			if (isPathOutsideWorkspace(absolutePath)) {
+				await provider.postMessageToWebview({
+					type: "fileContent",
+					fileContent: { path: requestPath, content: null, error: "Path is outside workspace" },
+				})
+				break
+			}
+
+			try {
+				const content = await fs.readFile(absolutePath, "utf8")
+				await provider.postMessageToWebview({
+					type: "fileContent",
+					fileContent: { path: requestPath, content },
+				})
+			} catch (error) {
+				await provider.postMessageToWebview({
+					type: "fileContent",
+					fileContent: {
+						path: requestPath,
+						content: null,
+						error: error instanceof Error ? error.message : String(error),
+					},
+				})
+			}
+			break
+		}
+
+		case "draggedImages":
+			// Images dropped into the chat are decoded and held by the webview itself
+			// (ChatTextArea#setSelectedImages) and travel with the outgoing message as
+			// `images`. There is nothing to persist host-side; this branch exists so the
+			// message is no longer silently swallowed by `default`.
+			break
 	}
 }

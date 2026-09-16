@@ -310,7 +310,7 @@
 		},
 		"subtasks": {
 			"label": "Subtasks",
-			"description": "Allow creation and completion of subtasks without requiring approval"
+			"description": "Allow creation of subtasks without requiring approval"
 		},
 		"followupQuestions": {
 			"label": "Question",

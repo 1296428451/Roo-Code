@@ -169,6 +169,7 @@ export class ProviderStateDelegate {
 			currentTaskTodos: currentTask?.todoList || [],
 			messageQueue: currentTask?.messageQueueService?.messages,
 			isPaused: currentTask?.isPaused ?? false,
+			backgroundTasks: this.provider.backgroundTaskDelegate.getBackgroundTaskItems(),
 			taskHistory: filteredTaskHistory,
 			soundEnabled: soundEnabled ?? false,
 			ttsEnabled: ttsEnabled ?? false,

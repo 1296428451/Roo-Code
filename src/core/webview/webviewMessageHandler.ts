@@ -41,10 +41,19 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 		case "autoApprovalEnabled":
 		case "resetState":
 		case "getVSCodeSetting":
+		case "customInstructions":
+		case "didShowAnnouncement":
+		case "hasOpenedModeSelector":
+		case "lockApiConfigAcrossModes":
+		case "toggleApiConfigPin":
+		case "enhancementApiConfigId":
+		case "playTts":
+		case "stopTts":
 			await handleProviderOperations(ctx, message)
 			break
 
 		case "newTask":
+		case "clearTask":
 		case "deleteTask":
 		case "deleteTaskWithId":
 		case "deleteMultipleTasksWithIds":
@@ -58,6 +67,13 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 		case "showTaskWithId":
 		case "exportCurrentTask":
 		case "exportTaskWithId":
+		case "condenseTaskContextRequest":
+		case "cancelAutoApproval":
+		case "terminalOperation":
+		case "getTaskWithAggregatedCosts":
+		case "backgroundActiveTask":
+		case "foregroundBackgroundTask":
+		case "stopBackgroundTask":
 			await handleTaskOperations(ctx, message)
 			break
 
@@ -129,6 +145,12 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 		case "openFile":
 		case "importSettings":
 		case "exportSettings":
+		case "openExternal":
+		case "openMention":
+		case "openKeyboardShortcuts":
+		case "updateVSCodeSetting":
+		case "readFileContent":
+		case "draggedImages":
 			await handleMiscOperations(ctx, message)
 			break
 

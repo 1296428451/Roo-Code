@@ -206,7 +206,7 @@ export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 			consecutiveMistakeLimit: Number.MAX_SAFE_INTEGER,
 		}
 
-		const task = await provider.createTask(text, images, undefined, options, configuration)
+		const task = await provider.createTask(text, images, undefined, options)
 
 		if (!task) {
 			throw new Error("Failed to create task due to policy restrictions")

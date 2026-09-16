@@ -77,7 +77,10 @@ const getCommandsMap = ({ context, outputChannel, provider }: RegisterCommandOpt
 			return
 		}
 
-		await visibleProvider.removeClineFromStack()
+		// "New Task" must exit straight to the main UI: close the whole task stack
+		// instead of only the top-most task, otherwise the user has to click once
+		// per open task (main task -> sub task -> main UI).
+		await visibleProvider.clearAllTasks()
 		await visibleProvider.refreshWorkspace()
 		await visibleProvider.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
 		// Send focusInput action immediately after chatButtonClicked

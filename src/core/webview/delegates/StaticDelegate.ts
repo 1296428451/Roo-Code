@@ -36,34 +36,29 @@ export class StaticDelegate {
 
 	static async handleCodeAction(
 		action: CodeActionId | CodeActionName,
-		context?: { taskId?: string; messageTs?: number },
+		promptType?: string,
+		context?: any, // eslint-disable-line @typescript-eslint/no-explicit-any
 	): Promise<void> {
 		const instance = StaticDelegate.getVisibleInstance()
 		if (!instance) return
 
 		await instance.postMessageToWebview({
 			type: "codeAction",
-			action,
-			taskId: context?.taskId,
-			messageTs: context?.messageTs,
+			codeAction: { action, promptType, ...(context ?? {}) },
 		})
 	}
 
 	static async handleTerminalAction(
 		action: TerminalActionId,
 		promptType?: TerminalActionPromptType,
-		context?: { taskId?: string; messageTs?: number; terminalId?: number },
+		context?: any, // eslint-disable-line @typescript-eslint/no-explicit-any
 	): Promise<void> {
 		const instance = StaticDelegate.getVisibleInstance()
 		if (!instance) return
 
 		await instance.postMessageToWebview({
 			type: "terminalAction",
-			action,
-			promptType,
-			taskId: context?.taskId,
-			messageTs: context?.messageTs,
-			terminalId: context?.terminalId,
+			terminalAction: { action, promptType, ...(context ?? {}) },
 		})
 	}
 }

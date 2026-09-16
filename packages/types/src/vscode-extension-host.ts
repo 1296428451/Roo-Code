@@ -1,12 +1,8 @@
-import { z } from "zod"
-
-import type { GlobalSettings, RooCodeSettings } from "./global-settings.js"
+import type { RooCodeSettings } from "./global-settings.js"
 import type { ProviderSettings, ProviderSettingsEntry } from "./provider-settings.js"
 import type { HistoryItem } from "./history.js"
 import type { ModeConfig, PromptComponent } from "./mode.js"
-import type { Experiments } from "./experiment.js"
 import type { ClineMessage, QueuedMessage } from "./message.js"
-import type { TodoItem } from "./todo.js"
 import type { OrganizationAllowList } from "./organization.js"
 import type { SerializedCustomToolDefinition } from "./custom-tool.js"
 import type { GitCommit } from "./git.js"
@@ -15,6 +11,10 @@ import type { ModelRecord, RouterModels } from "./model.js"
 import type { OpenAiCodexRateLimitInfo } from "./providers/openai-codex-rate-limits.js"
 import type { SkillMetadata } from "./skills.js"
 import type { WorktreeIncludeStatus } from "./worktree.js"
+import type { CodeActionId, CodeActionName, TerminalActionId, TerminalActionPromptType } from "./vscode.js"
+
+import type { ExtensionState } from "./extension-state.js"
+import type { WebViewMessagePayload } from "./indexing.js"
 
 /**
  * ExtensionMessage
@@ -94,6 +94,8 @@ export interface ExtensionMessage {
 		| "fileContent"
 		| "deletedFilesUpdated"
 		| "fileRestoreResult"
+		| "codeAction"
+		| "terminalAction"
 	suppressMessage?: boolean
 	text?: string
 	/** For fileContent: { path, content, error? } */
@@ -106,6 +108,22 @@ export interface ExtensionMessage {
 		relativePath: string
 		success: boolean
 		error?: string
+	}
+	/**
+	 * Custom feature: a code/terminal action triggered from a VS Code command
+	 * (e.g. an editor code lens) is forwarded to the visible webview so it can
+	 * perform the action in the UI. The payload is nested under `codeAction` /
+	 * `terminalAction` to avoid colliding with the top-level `action` field.
+	 */
+	codeAction?: {
+		action: CodeActionId | CodeActionName
+		promptType?: string
+		[key: string]: unknown
+	}
+	terminalAction?: {
+		action: TerminalActionId
+		promptType?: TerminalActionPromptType
+		[key: string]: unknown
 	}
 	payload?: any // eslint-disable-line @typescript-eslint/no-explicit-any
 	checkpointWarning?: {
@@ -237,129 +255,6 @@ export interface OpenAiCodexRateLimitsMessage {
 	error?: string
 }
 
-export type ExtensionState = Pick<
-	GlobalSettings,
-	| "currentApiConfigName"
-	| "listApiConfigMeta"
-	| "pinnedApiConfigs"
-	| "customInstructions"
-	| "dismissedUpsells"
-	| "autoApprovalEnabled"
-	| "alwaysAllowReadOnly"
-	| "alwaysAllowReadOnlyOutsideWorkspace"
-	| "alwaysAllowWrite"
-	| "alwaysAllowWriteOutsideWorkspace"
-	| "alwaysAllowWriteProtected"
-	| "alwaysAllowMcp"
-	| "alwaysAllowModeSwitch"
-	| "alwaysAllowSubtasks"
-	| "alwaysAllowFollowupQuestions"
-	| "alwaysAllowExecute"
-	| "followupAutoApproveTimeoutMs"
-	| "allowedCommands"
-	| "deniedCommands"
-	| "allowedMaxRequests"
-	| "allowedMaxCost"
-	| "ttsEnabled"
-	| "ttsSpeed"
-	| "soundEnabled"
-	| "soundVolume"
-	| "terminalOutputPreviewSize"
-	| "terminalShellIntegrationTimeout"
-	| "terminalShellIntegrationDisabled"
-	| "terminalCommandDelay"
-	| "terminalPowershellCounter"
-	| "terminalZshClearEolMark"
-	| "terminalZshOhMy"
-	| "terminalZshP10k"
-	| "terminalZdotdir"
-	| "execaShellPath"
-	| "diagnosticsEnabled"
-	| "language"
-	| "modeApiConfigs"
-	| "customModePrompts"
-	| "customSupportPrompts"
-	| "enhancementApiConfigId"
-	| "customCondensingPrompt"
-	| "codebaseIndexConfig"
-	| "codebaseIndexModels"
-	| "profileThresholds"
-	| "includeDiagnosticMessages"
-	| "maxDiagnosticMessages"
-	| "imageGenerationProvider"
-	| "openRouterImageGenerationSelectedModel"
-	| "includeTaskHistoryInEnhance"
-	| "reasoningBlockCollapsed"
-	| "enterBehavior"
-	| "includeCurrentTime"
-	| "includeCurrentCost"
-	| "includeDirectoryDetails"
-	| "maxGitStatusFiles"
-	| "requestDelaySeconds"
-	| "showWorktreesInHomeScreen"
-	| "disabledTools"
-> & {
-	lockApiConfigAcrossModes?: boolean
-	version: string
-	clineMessages: ClineMessage[]
-	currentTaskId?: string
-	currentTaskItem?: HistoryItem
-	currentTaskTodos?: TodoItem[] // Initial todos for the current task
-	apiConfiguration: ProviderSettings
-	uriScheme?: string
-	shouldShowAnnouncement: boolean
-
-	taskHistory: HistoryItem[]
-
-	writeDelayMs: number
-
-	enableCheckpoints: boolean
-	checkpointTimeout: number // Timeout for checkpoint initialization in seconds (default: 15)
-	maxOpenTabsContext: number // Maximum number of VSCode open tabs to include in context (0-500)
-	maxWorkspaceFiles: number // Maximum number of files to include in current working directory details (0-500)
-	showRooIgnoredFiles: boolean // Whether to show .rooignore'd files in listings
-	enableSubfolderRules: boolean // Whether to load rules from subdirectories
-	maxReadFileLine?: number // Maximum line limit for read_file tool (-1 for default)
-	maxImageFileSize: number // Maximum size of image files to process in MB
-	maxTotalImageSize: number // Maximum total size for all images in a single read operation in MB
-
-	experiments: Experiments // Map of experiment IDs to their enabled state
-
-	mcpEnabled: boolean
-
-	mode: string
-	customModes: ModeConfig[]
-	toolRequirements?: Record<string, boolean> // Map of tool names to their requirements (e.g. {"apply_diff": true})
-
-	cwd?: string // Current working directory
-	renderContext: "sidebar" | "editor"
-	settingsImportedAt?: number
-	historyPreviewCollapsed?: boolean
-
-	organizationAllowList: OrganizationAllowList
-
-	autoCondenseContext: boolean
-	autoCondenseContextPercent: number
-	profileThresholds: Record<string, number>
-	hasOpenedModeSelector: boolean
-	openRouterImageApiKey?: string
-	messageQueue?: QueuedMessage[]
-	lastShownAnnouncementId?: string
-	apiModelId?: string
-	mcpServers?: McpServer[]
-	openAiCodexIsAuthenticated?: boolean
-	debug?: boolean
-
-	/**
-	 * Monotonically increasing sequence number for clineMessages state pushes.
-	 * When present, the frontend should only apply clineMessages from a state push
-	 * if its seq is greater than the last applied seq. This prevents stale state
-	 * (captured during async getStateToPostToWebview) from overwriting newer messages.
-	 */
-	clineMessagesSeq?: number
-	isPaused?: boolean
-}
-
 export interface Command {
 	name: string
 	source: "global" | "project" | "built-in"
@@ -368,22 +263,14 @@ export interface Command {
 	argumentHint?: string
 }
 
-/**
- * WebviewMessage
- * Webview | CLI -> Extension
- */
-
 export type ClineAskResponse = "yesButtonClicked" | "noButtonClicked" | "messageResponse" | "objectResponse"
 
 export type AudioType = "notification" | "celebration" | "progress_loop"
 
-export interface UpdateTodoListPayload {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	todos: any[]
-}
-
-export type EditQueuedMessagePayload = Pick<QueuedMessage, "id" | "text" | "images">
-
+/**
+ * WebviewMessage
+ * Webview | CLI -> Extension
+ */
 export interface WebviewMessage {
 	type:
 		| "updateTodoList"
@@ -547,7 +434,11 @@ export interface WebviewMessage {
 		| "moveSkill"
 		| "updateSkillModes"
 		| "openSkillFile"
-	text?: string
+		// Multi-agent / background task messages
+		| "backgroundActiveTask"
+		| "foregroundBackgroundTask"
+		| "stopBackgroundTask"
+		text?: string
 	taskId?: string
 	editedMessageContent?: string
 	tab?: "settings" | "history" | "mcp" | "modes" | "chat"
@@ -662,162 +553,27 @@ export interface RequestOpenAiCodexRateLimitsMessage {
 	type: "requestOpenAiCodexRateLimits"
 }
 
-export const checkoutDiffPayloadSchema = z.object({
-	ts: z.number().optional(),
-	previousCommitHash: z.string().optional(),
-	commitHash: z.string(),
-	mode: z.enum(["full", "checkpoint", "from-init", "to-current"]),
-})
+// -----------------------------------------------------------------------------
+// Re-exports: the definitions below live in their own modules to keep this file
+// focused, but they remain part of the public `@roo-code/types` surface.
+// -----------------------------------------------------------------------------
 
-export type CheckpointDiffPayload = z.infer<typeof checkoutDiffPayloadSchema>
-
-export const checkoutRestorePayloadSchema = z.object({
-	ts: z.number(),
-	commitHash: z.string(),
-	mode: z.enum(["preview", "restore"]),
-})
-
-export type CheckpointRestorePayload = z.infer<typeof checkoutRestorePayloadSchema>
-
-export interface IndexingStatusPayload {
-	state: "Standby" | "Indexing" | "Indexed" | "Error" | "Stopping"
-	message: string
-}
-
-export interface IndexClearedPayload {
-	success: boolean
-	error?: string
-}
-
-export type WebViewMessagePayload =
-	| CheckpointDiffPayload
-	| CheckpointRestorePayload
-	| IndexingStatusPayload
-	| IndexClearedPayload
-	| UpdateTodoListPayload
-	| EditQueuedMessagePayload
-
-export interface IndexingStatus {
-	systemStatus: string
-	message?: string
-	processedItems: number
-	totalItems: number
-	currentItemUnit?: string
-	workspacePath?: string
-	workspaceEnabled?: boolean
-	autoEnableDefault?: boolean
-	indexWorkspacePath?: string
-}
-
-export interface IndexingStatusUpdateMessage {
-	type: "indexingStatusUpdate"
-	values: IndexingStatus
-}
-
-export interface LanguageModelChatSelector {
-	vendor?: string
-	family?: string
-	version?: string
-	id?: string
-}
-
-export interface ClineSayTool {
-	tool:
-		| "editedExistingFile"
-		| "appliedDiff"
-		| "newFileCreated"
-		| "codebaseSearch"
-		| "readFile"
-		| "readCommandOutput"
-		| "listFilesTopLevel"
-		| "listFilesRecursive"
-		| "searchFiles"
-		| "switchMode"
-		| "newTask"
-		| "finishTask"
-		| "generateImage"
-		| "imageGenerated"
-		| "runSlashCommand"
-		| "updateTodoList"
-		| "skill"
-	path?: string
-	// For readCommandOutput
-	readStart?: number
-	readEnd?: number
-	totalBytes?: number
-	searchPattern?: string
-	matchCount?: number
-	diff?: string
-	content?: string
-	// Original file content before first edit (for merged diff display in FileChangesPanel)
-	originalContent?: string
-	// Unified diff statistics computed by the extension
-	diffStats?: { added: number; removed: number }
-	regex?: string
-	filePattern?: string
-	mode?: string
-	reason?: string
-	isOutsideWorkspace?: boolean
-	isProtected?: boolean
-	additionalFileCount?: number // Number of additional files in the same read_file request
-	lineNumber?: number
-	startLine?: number // Starting line for read_file operations (for navigation on click)
-	query?: string
-	batchFiles?: Array<{
-		path: string
-		lineSnippet: string
-		isOutsideWorkspace?: boolean
-		key: string
-		content?: string
-	}>
-	batchDiffs?: Array<{
-		path: string
-		changeCount: number
-		key: string
-		content: string
-		// Per-file unified diff statistics computed by the extension
-		diffStats?: { added: number; removed: number }
-		diffs?: Array<{
-			content: string
-			startLine?: number
-		}>
-	}>
-	batchDirs?: Array<{
-		path: string
-		recursive: boolean
-		isOutsideWorkspace?: boolean
-		key: string
-	}>
-	question?: string
-	imageData?: string // Base64 encoded image data for generated images
-	// Properties for runSlashCommand tool
-	command?: string
-	args?: string
-	source?: string
-	description?: string
-	// Properties for skill tool
-	skill?: string
-}
-
-export interface ClineAskUseMcpServer {
-	serverName: string
-	type: "use_mcp_tool" | "access_mcp_resource"
-	toolName?: string
-	arguments?: string
-	uri?: string
-	response?: string
-}
-
-export interface ClineApiReqInfo {
-	request?: string
-	tokensIn?: number
-	tokensOut?: number
-	cacheWrites?: number
-	cacheReads?: number
-	cost?: number
-	cancelReason?: ClineApiReqCancelReason
-	streamingFailedMessage?: string
-	apiProtocol?: "anthropic" | "openai"
-}
-
-export type ClineApiReqCancelReason = "streaming_failed" | "user_cancelled"
+export type { BackgroundTaskItem } from "./background-task.js"
+export type { ExtensionState } from "./extension-state.js"
+export { checkoutDiffPayloadSchema, checkoutRestorePayloadSchema } from "./checkpoint.js"
+export type { CheckpointDiffPayload, CheckpointRestorePayload } from "./checkpoint.js"
+export type {
+	IndexingStatusPayload,
+	IndexClearedPayload,
+	UpdateTodoListPayload,
+	EditQueuedMessagePayload,
+	WebViewMessagePayload,
+	IndexingStatus,
+	IndexingStatusUpdateMessage,
+} from "./indexing.js"
+export type {
+	ClineSayTool,
+	ClineAskUseMcpServer,
+	ClineApiReqInfo,
+	ClineApiReqCancelReason,
+} from "./cline-tool-types.js"

@@ -528,14 +528,12 @@ export async function presentAssistantMessage(cline: Task) {
 				return true
 			}
 
-			const askFinishSubTaskApproval = async () => {
-				// Ask the user to approve this task has completed, and he has
-				// reviewed it, and we can declare task is finished and return
-				// control to the parent task to continue running the rest of
-				// the sub-tasks.
-				const toolMessage = JSON.stringify({ tool: "finishTask" })
-				return await askApproval("tool", toolMessage)
-			}
+			// Subtasks hand control back to the parent automatically: as soon as a
+			// child task signals completion we resume the parent task so it can
+			// continue with the remaining work, without asking the user to confirm.
+			// (Previously this raised the "finishTask" approval prompt, which was
+			// gated on the "Subtasks" auto-approval setting.)
+			const askFinishSubTaskApproval = () => Promise.resolve(true)
 
 			const handleError = async (action: string, error: Error) => {
 				// Silently ignore AskIgnoredError - this is an internal control flow

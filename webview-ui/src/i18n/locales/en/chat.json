@@ -23,6 +23,19 @@
 	},
 	"unpin": "Unpin",
 	"pin": "Pin",
+	"background": {
+		"title": "Background sessions",
+		"runActive": "Run in background",
+		"foreground": "Bring to foreground",
+		"stop": "Stop background task",
+		"current": "Current",
+		"running": "Running",
+		"needsConfirmation": "Needs confirmation",
+		"completed": "Completed",
+		"aborted": "Stopped",
+		"runningCount": "{{count}} running",
+		"needsConfirmationCount": "{{count}} need confirmation"
+	},
 	"fileChangesInConversation": {
 		"header": "{{count}} file(s) changed in this conversation",
 		"headerWithDeleted": "{{count}} file(s) changed in this conversation ({{deletedCount}} deleted, recoverable)",
