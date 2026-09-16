@@ -319,9 +319,9 @@
 		},
 		"execute": {
 			"label": "Execute",
-			"description": "Automatically execute allowed terminal commands without requiring approval",
+			"description": "When enabled, all terminal commands are executed automatically without approval. When disabled, only commands on the allowed list below are auto-executed.",
 			"allowedCommands": "Allowed Auto-Execute Commands",
-			"allowedCommandsDescription": "Command prefixes that can be auto-executed when \"Always approve execute operations\" is enabled. Add * to allow all commands (use with caution).",
+			"allowedCommandsDescription": "Command prefixes auto-executed without approval when the \"Execute\" auto-approval toggle is off (when it is on, all commands run automatically). Add * to allow all commands (use with caution).",
 			"deniedCommands": "Denied Commands",
 			"deniedCommandsDescription": "Command prefixes that will be automatically denied without asking for approval. In case of conflicts with allowed commands, the longest prefix match takes precedence. Add * to deny all commands.",
 			"commandPlaceholder": "Enter command prefix (e.g., 'git ')",

@@ -116,21 +116,24 @@ export async function checkAutoApproval({
 			return { decision: "ask" }
 		}
 
+		// Conversation-level "Execute" auto-approval toggle:
+		// When enabled, every command execution is approved immediately —
+		// the user never has to click approve, regardless of the command
+		// allow/deny lists.
 		if (state.alwaysAllowExecute === true) {
-			// When allowedCommands is empty, treat it as an implicit wildcard "*"
-			// so that checking the "Execute" checkbox alone auto-approves all commands,
-			// consistent with how Read/Write auto-approval works.
-			const allowedCommands = state.allowedCommands?.length ? state.allowedCommands : ["*"]
-			const decision = getCommandDecision(text, allowedCommands, state.deniedCommands || [])
-
-			if (decision === "auto_approve") {
-				return { decision: "approve" }
-			} else if (decision === "auto_deny") {
-				return { decision: "deny" }
-			} else {
-				return { decision: "ask" }
-			}
+			return { decision: "approve" }
 		}
+
+		// When "Execute" is disabled, only commands matching the command
+		// whitelist (Settings → Auto Approval → Execute → Allowed Commands)
+		// are auto-approved; everything else still requires user confirmation.
+		const decision = getCommandDecision(text, state.allowedCommands || [], state.deniedCommands || [])
+
+		if (decision === "auto_approve") {
+			return { decision: "approve" }
+		}
+
+		return { decision: "ask" }
 	}
 
 	if (ask === "tool") {

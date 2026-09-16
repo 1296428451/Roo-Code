@@ -259,9 +259,9 @@
 		},
 		"execute": {
 			"label": "执行",
-			"description": "自动执行白名单中的命令而无需批准",
+			"description": "启用后所有终端命令都会自动执行，无需批准；关闭时仅自动执行下方白名单中的命令。",
 			"allowedCommands": "命令白名单",
-			"allowedCommandsDescription": "当\"自动批准命令行操作\"启用时可以自动执行的命令前缀。添加 * 以允许所有命令（谨慎使用）。",
+			"allowedCommandsDescription": "当会话中\"执行\"自动批准关闭时，匹配的命令前缀将自动执行（开启\"执行\"后所有命令都会自动执行）。添加 * 以允许所有命令（谨慎使用）。",
 			"deniedCommands": "拒绝的命令",
 			"deniedCommandsDescription": "将自动拒绝的命令前缀，无需用户批准。与允许命令冲突时，最长前缀匹配优先。添加 * 拒绝所有命令。",
 			"commandPlaceholder": "输入命令前缀（例如 'git '）",
