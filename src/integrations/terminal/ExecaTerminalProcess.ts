@@ -43,13 +43,25 @@ export class ExecaTerminalProcess extends BaseTerminalProcess {
 				shell: BaseTerminal.getExecaShellPath() || true,
 				cwd: this.terminal.getCurrentWorkingDirectory(),
 				all: true,
+				// Capture raw bytes instead of letting execa decode them as UTF-8
+				// (its default `encoding: "utf8"` silently turns non-UTF-8 output
+				// into replacement characters before we ever see it). With
+				// `encoding: "buffer"` the iterable below yields Uint8Array chunks
+				// that we decode ourselves, per line. On Chinese Windows cmd.exe
+				// built-ins (echo, dir, ...) write GBK/cp936 bytes to a pipe no
+				// matter what `chcp` says, while other tools (see PYTHONUTF8) may
+				// write UTF-8, so a single fixed decoder cannot be correct.
+				encoding: "buffer",
 				// Ignore stdin to ensure non-interactive mode and prevent hanging
 				stdin: "ignore",
 				env: {
 					...process.env,
-					// Ensure UTF-8 encoding for Ruby, CocoaPods, etc.
+					// Ensure UTF-8 encoding for Unix tools (Ruby, CocoaPods, etc.)
 					LANG: "en_US.UTF-8",
 					LC_ALL: "en_US.UTF-8",
+					// Force Python (a frequent source of CJK output) to emit UTF-8 on Windows
+					PYTHONUTF8: "1",
+					PYTHONIOENCODING: "utf-8",
 				},
 			})`${command}`
 
@@ -76,10 +88,69 @@ export class ExecaTerminalProcess extends BaseTerminalProcess {
 
 			const rawStream = this.subprocess.iterable({ from: "all", preserveNewlines: true })
 
-			// Wrap the stream to ensure all chunks are strings (execa can return Uint8Array)
+			// `encoding: "buffer"` above makes the iterable yield raw Uint8Array
+			// chunks. Buffer bytes and decode at line boundaries so multi-byte
+			// sequences spanning chunks stay intact (never decode per chunk: a
+			// chunk boundary can split a multi-byte character). On Chinese Windows
+			// cmd.exe built-ins emit GBK (cp936) while most other tools emit UTF-8,
+			// so each line is decoded adaptively - see decodeLine below.
+			let byteBuffer = new Uint8Array(0)
+
+			// Characters that effectively never occur in ordinary Chinese or
+			// English terminal output, yet appear constantly when GBK bytes are
+			// misread as UTF-8. Examples: GBK "目录" (c4 bf c2 bc) is valid UTF-8
+			// and would decode to "Ŀ¼"; GBK "系统" (cf b5 cd b3) decodes to the
+			// Greek "ϵͳ".
+			const looksLikeGbkMisdecodedAsUtf8 = (text: string): boolean =>
+				/[\u0100-\u02ff\u0370-\u03ff\u0400-\u04ff\ufffd\ue000-\uf8ff]/.test(text)
+
+			const decodeGbk = (line: Uint8Array): string => {
+				try {
+					return new TextDecoder("gbk").decode(line)
+				} catch {
+					return new TextDecoder("utf-8", { fatal: false }).decode(line)
+				}
+			}
+
+			const decodeLine = (line: Uint8Array): string => {
+				let utf8: string
+				try {
+					utf8 = new TextDecoder("utf-8", { fatal: true }).decode(line)
+				} catch {
+					// Not valid UTF-8: on Chinese Windows this is GBK (cp936).
+					return decodeGbk(line)
+				}
+				// Valid UTF-8, but GBK bytes for CJK can coincidentally be valid
+				// UTF-8 and decode into bare Latin-Extended/Greek/Cyrillic runs
+				// (e.g. "系统" -> "ϵͳ"). Real UTF-8 text that legitimately contains
+				// such characters almost always sits next to ASCII letters (e.g.
+				// "alpha=α"), whereas GBK mojibake is bare. So only fall back to
+				// GBK for bare-looking mojibake that GBK then decodes cleanly.
+				if (!looksLikeGbkMisdecodedAsUtf8(utf8) || /[A-Za-z]/.test(utf8)) {
+					return utf8
+				}
+				const gbk = decodeGbk(line)
+				return looksLikeGbkMisdecodedAsUtf8(gbk) ? utf8 : gbk
+			}
 			const stream = (async function* () {
 				for await (const chunk of rawStream) {
-					yield typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk)
+					if (typeof chunk === "string") {
+						yield chunk
+						continue
+					}
+					const merged = new Uint8Array(byteBuffer.length + chunk.length)
+					merged.set(byteBuffer)
+					merged.set(chunk, byteBuffer.length)
+					byteBuffer = merged
+					let nl: number
+					while ((nl = byteBuffer.indexOf(0x0a)) !== -1) {
+						const lineBytes = byteBuffer.subarray(0, nl + 1)
+						yield decodeLine(lineBytes)
+						byteBuffer = byteBuffer.subarray(nl + 1)
+					}
+				}
+				if (byteBuffer.length > 0) {
+					yield decodeLine(byteBuffer)
 				}
 			})()
 
