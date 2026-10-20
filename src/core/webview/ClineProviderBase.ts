@@ -174,15 +174,69 @@ export class ClineProviderBase extends EventEmitter<TaskProviderEvents> {
 		return this.skillsManager
 	}
 
+	/**
+	 * Gets the CodeIndexManager for the current active workspace.
+	 *
+	 * Resolves the per-workspace singleton instead of returning a cached field:
+	 * `CodeIndexManager` instances are keyed by workspace folder path, so this
+	 * keeps the reference correct when the active folder changes in a
+	 * multi-root workspace.
+	 */
 	getCurrentWorkspaceCodeIndexManager(): CodeIndexManager | undefined {
-		return this.codeIndexManager
+		return CodeIndexManager.getInstance(this.context)
 	}
 
-	updateCodeIndexStatusSubscription(subscription: vscode.Disposable | undefined) {
+	/**
+	 * Updates the code index status subscription so it follows the manager of the
+	 * current workspace.
+	 *
+	 * Also forwards the manager's progress events to the webview, which is the
+	 * only path through which indexing progress, `workspaceEnabled` and
+	 * `indexWorkspacePath` reach the code index popover. Must be called once the
+	 * webview view exists and again whenever the active workspace may have
+	 * changed.
+	 */
+	public updateCodeIndexStatusSubscription(): void {
+		const currentManager = this.getCurrentWorkspaceCodeIndexManager()
+
+		// If the manager hasn't changed, no need to update the subscription.
+		if (currentManager === this.codeIndexManager) {
+			return
+		}
+
+		// Dispose the old subscription if it exists.
 		if (this.codeIndexStatusSubscription) {
 			this.codeIndexStatusSubscription.dispose()
+			this.codeIndexStatusSubscription = undefined
 		}
-		this.codeIndexStatusSubscription = subscription
+
+		// Update the current workspace manager reference.
+		this.codeIndexManager = currentManager
+
+		if (!currentManager) {
+			return
+		}
+
+		// Subscribe to the new manager's progress updates.
+		this.codeIndexStatusSubscription = currentManager.onProgressUpdate(() => {
+			// Only send updates if this manager is still the current one.
+			if (currentManager === this.getCurrentWorkspaceCodeIndexManager()) {
+				void this.webviewLifecycleDelegate.postMessageToWebview({
+					type: "indexingStatusUpdate",
+					values: currentManager.getCurrentStatus(),
+				})
+			}
+		})
+
+		if (this.view) {
+			this.webviewDisposables.push(this.codeIndexStatusSubscription)
+		}
+
+		// Send the initial status for the current workspace.
+		void this.webviewLifecycleDelegate.postMessageToWebview({
+			type: "indexingStatusUpdate",
+			values: currentManager.getCurrentStatus(),
+		})
 	}
 
 	// =============================================================================

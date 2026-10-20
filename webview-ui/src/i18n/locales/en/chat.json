@@ -114,7 +114,8 @@
 	},
 	"resumeTask": {
 		"title": "Continue",
-		"tooltip": "Resume the current task"
+		"tooltip": "Resume the current task",
+		"typeToContinue": "Type a message to continue"
 	},
 	"terminate": {
 		"title": "New task",

@@ -24,6 +24,20 @@ export class WebviewLifecycleDelegate {
 
 		this.setWebviewMessageListener(webviewView.webview)
 
+		// Initialize the code index status subscription for the current workspace.
+		// Without this the provider never holds a CodeIndexManager reference, so
+		// every code index message (startIndexing, requestIndexingStatus, ...)
+		// falls through as if no workspace were open.
+		this.provider.updateCodeIndexStatusSubscription()
+
+		// Listen for active editor changes to re-resolve the code index manager
+		// when the current workspace might have changed.
+		this.provider.webviewDisposables.push(
+			vscode.window.onDidChangeActiveTextEditor(() => {
+				this.provider.updateCodeIndexStatusSubscription()
+			}),
+		)
+
 		// Handle visibility changes
 		if ("onDidChangeVisibility" in webviewView) {
 			this.provider.webviewDisposables.push(

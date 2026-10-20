@@ -73,7 +73,8 @@
 	},
 	"resumeTask": {
 		"title": "Göreve Devam Et",
-		"tooltip": "Mevcut göreve devam et"
+		"tooltip": "Mevcut göreve devam et",
+		"typeToContinue": "Devam etmek için bir mesaj yazın"
 	},
 	"terminate": {
 		"title": "Sonlandır",

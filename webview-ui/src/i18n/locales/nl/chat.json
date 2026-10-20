@@ -73,7 +73,8 @@
 	},
 	"resumeTask": {
 		"title": "Taak hervatten",
-		"tooltip": "Ga door met de huidige taak"
+		"tooltip": "Ga door met de huidige taak",
+		"typeToContinue": "Typ een bericht om door te gaan"
 	},
 	"terminate": {
 		"title": "Beëindigen",

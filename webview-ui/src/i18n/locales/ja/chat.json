@@ -73,7 +73,8 @@
 	},
 	"resumeTask": {
 		"title": "タスクを再開",
-		"tooltip": "現在のタスクを続行"
+		"tooltip": "現在のタスクを続行",
+		"typeToContinue": "メッセージを入力して続行"
 	},
 	"terminate": {
 		"title": "終了",

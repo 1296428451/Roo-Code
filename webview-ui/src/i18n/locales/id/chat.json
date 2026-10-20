@@ -103,7 +103,8 @@
 	},
 	"resumeTask": {
 		"title": "Lanjutkan Tugas",
-		"tooltip": "Lanjutkan tugas saat ini"
+		"tooltip": "Lanjutkan tugas saat ini",
+		"typeToContinue": "Ketik pesan untuk melanjutkan"
 	},
 	"terminate": {
 		"title": "Hentikan",

@@ -4,7 +4,7 @@ import * as fs from "fs"
 import * as childProcess from "child_process"
 import * as readline from "readline"
 import { byLengthAsc, Fzf } from "fzf"
-import { getBinPath } from "../ripgrep"
+import { getBinPath, describeRipgrepSearchPaths } from "../ripgrep"
 import { Package } from "../../shared/package"
 
 export type FileResult = { path: string; type: "file" | "folder"; label?: string }
@@ -21,7 +21,7 @@ export async function executeRipgrep({
 	const rgPath = await getBinPath(vscode.env.appRoot)
 
 	if (!rgPath) {
-		throw new Error(`ripgrep not found: ${rgPath}`)
+		throw new Error(`Could not find ripgrep binary.\n${describeRipgrepSearchPaths()}`)
 	}
 
 	return new Promise((resolve, reject) => {

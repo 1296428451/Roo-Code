@@ -73,7 +73,8 @@
 	},
 	"resumeTask": {
 		"title": "Reanudar tarea",
-		"tooltip": "Reanudar la tarea actual"
+		"tooltip": "Reanudar la tarea actual",
+		"typeToContinue": "Escribe un mensaje para continuar"
 	},
 	"terminate": {
 		"title": "Terminar",

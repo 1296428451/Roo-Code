@@ -136,6 +136,24 @@ export const handleTaskOperations = async (ctx: HandlerContext, message: any): P
 			break
 		}
 
+		case "resumeTaskWithMessage": {
+			try {
+				const currentTask = provider.getCurrentTask()
+				if (currentTask) {
+					const resolved = await resolveIncomingImages(ctx, {
+						text: message.text,
+						images: message.images,
+					})
+
+					currentTask.resumeWithUserMessage(resolved.text, resolved.images)
+					await provider.postStateToWebview()
+				}
+			} catch (error) {
+				vscode.window.showErrorMessage(t("common:errors.resume_task"))
+			}
+			break
+		}
+
 		case "abortTask": {
 			try {
 				const currentTask = provider.getCurrentTask()

@@ -73,7 +73,8 @@
 	},
 	"resumeTask": {
 		"title": "Reprendre la tasca",
-		"tooltip": "Repren la tasca actual"
+		"tooltip": "Repren la tasca actual",
+		"typeToContinue": "Escriu un missatge per continuar"
 	},
 	"terminate": {
 		"title": "Finalitzar",

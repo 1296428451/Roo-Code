@@ -73,7 +73,8 @@
 	},
 	"resumeTask": {
 		"title": "Riprendi attività",
-		"tooltip": "Continua l'attività corrente"
+		"tooltip": "Continua l'attività corrente",
+		"typeToContinue": "Scrivi un messaggio per continuare"
 	},
 	"terminate": {
 		"title": "Termina",

@@ -194,21 +194,40 @@ export const handleCodeIndexOperations = async (ctx: import("../webviewMessageHa
 
 				await manager.setWorkspaceEnabled(true)
 
-				if (manager.isFeatureEnabled && manager.isFeatureConfigured) {
+				// `isFeatureEnabled` / `isFeatureConfigured` are derived from the
+				// config manager, which only exists after `initialize()`. Checking
+				// them first silently swallows the very first click on "Start".
+				try {
 					await manager.initialize(provider.contextProxy)
+				} catch (error) {
+					provider.log(`Code index initialization failed while starting indexing: ${error}`)
+				}
 
-					const currentState = manager.state
-					if (currentState === "Standby" || currentState === "Error") {
-						manager.startIndexing()
+				if (manager.isFeatureEnabled && manager.isFeatureConfigured) {
+					// `startIndexing()` recovers from the Error state by tearing down
+					// all services, which leaves the manager uninitialized again, so
+					// re-initialize and retry once in that case.
+					void manager.startIndexing()
 
-						if (!manager.isInitialized) {
+					if (!manager.isInitialized) {
+						try {
 							await manager.initialize(provider.contextProxy)
-							if (manager.state === "Standby" || manager.state === "Error") {
-								manager.startIndexing()
-							}
+							void manager.startIndexing()
+						} catch (error) {
+							provider.log(`Code index re-initialization failed while starting indexing: ${error}`)
 						}
 					}
+				} else {
+					provider.log(
+						`Cannot start indexing: feature enabled=${manager.isFeatureEnabled}, configured=${manager.isFeatureConfigured}`,
+					)
 				}
+
+				// Always report the resulting status so the UI never looks unresponsive.
+				provider.postMessageToWebview({
+					type: "indexingStatusUpdate",
+					values: manager.getCurrentStatus(),
+				})
 			} catch (error) {
 				provider.log(`Error starting indexing: ${error}`)
 			}
@@ -242,10 +261,25 @@ export const handleCodeIndexOperations = async (ctx: import("../webviewMessageHa
 				}
 				const enabled = message.bool ?? false
 				await manager.setWorkspaceEnabled(enabled)
-				if (enabled && manager.isFeatureEnabled && manager.isFeatureConfigured) {
-					await manager.initialize(provider.contextProxy)
-					manager.startIndexing()
-				} else if (!enabled) {
+
+				if (enabled) {
+					// Initialize before reading the feature flags below: they are
+					// only known once the config manager has loaded the persisted
+					// settings.
+					try {
+						await manager.initialize(provider.contextProxy)
+					} catch (error) {
+						provider.log(`Code index initialization failed while enabling workspace: ${error}`)
+					}
+
+					if (manager.isFeatureEnabled && manager.isFeatureConfigured) {
+						void manager.startIndexing()
+					} else {
+						provider.log(
+							`Workspace indexing enabled but indexing cannot start: feature enabled=${manager.isFeatureEnabled}, configured=${manager.isFeatureConfigured}`,
+						)
+					}
+				} else {
 					manager.stopIndexing()
 				}
 				provider.postMessageToWebview({

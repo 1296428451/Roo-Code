@@ -8,6 +8,7 @@
 		"preinstall": "node scripts/bootstrap.mjs",
 		"prepare": "husky",
 		"install": "node scripts/bootstrap.mjs",
+		"postinstall": "node scripts/ensure-ripgrep.mjs",
 		"install:all": "node scripts/bootstrap.mjs",
 		"lint": "turbo lint --log-order grouped --output-logs new-only",
 		"check-types": "turbo check-types --log-order grouped --output-logs new-only",

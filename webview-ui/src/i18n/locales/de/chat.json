@@ -73,7 +73,8 @@
 	},
 	"resumeTask": {
 		"title": "Aufgabe fortsetzen",
-		"tooltip": "Aktuelle Aufgabe fortsetzen"
+		"tooltip": "Aktuelle Aufgabe fortsetzen",
+		"typeToContinue": "Nachricht eingeben, um fortzufahren"
 	},
 	"terminate": {
 		"title": "Beenden",

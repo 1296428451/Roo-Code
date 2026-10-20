@@ -49,3 +49,21 @@
 - defense/risk: 新增核心工具时必须同步修改解析器的两处 switch（完整解析 + 流式部分解析），并补充 parseToolCall / processStreamingChunk / finalizeStreamingToolCall 三层回归测试。排查此类"某工具单独失败"问题时，优先检查解析器 switch 是否覆盖该工具，而非工具实现本身。
 
 ---
+
+### [2026-09-18] 终端工具中文输出乱码：cmd 内建命令恒输出 GBK，而 execa 默认按 UTF-8 解码
+
+- symptom/intent: 模型调用终端工具执行含中文的命令时，回传的中文变成 `���`（U+FFFD）或 `Ŀ¼`、`ϵͳ` 这类拉丁/希腊字母乱码，而数字、英文等 ASCII 内容显示完全正常。
+- root cause/logic: 三层叠加。① **execa 默认 `encoding: "utf8"`**（`execa/lib/arguments/options.js`），`subprocess.iterable()` 在交付前已把字节按 UTF-8 解码成字符串，`typeof chunk === "string"` 恒真——因此任何写在 iterable 之后的"按字节缓冲 + 回退解码"代码都是**死代码**，看起来已修实则从未执行。② **cmd.exe 内建命令（echo/dir 等）写管道时恒用系统 ANSI/OEM 码页（中文 Windows = cp936/GBK），`chcp 65001` 与 `chcp 936` 都改不动它**（实测 `echo 你好` 恒输出 `c4 e3 ba c3`），且 65001 码页下 cmd 另有已知的输出损坏 bug；而 Python 等外部程序按自身编码输出 UTF-8（本仓库已注入 `PYTHONUTF8=1`）。同一条流里 GBK 与 UTF-8 混用，任何单一固定解码器都必然出错——`c4 e3 ba c3` 被纯 UTF-8 解码正好得到 `���`，与现象完全吻合。③ GBK 中文字节有时**恰好是合法 UTF-8**（「目录」`c4 bf c2 bc`→`Ŀ¼`、「系统」`cf b5 cd b3`→`ϵͳ`），单纯"UTF-8 失败才回退 GBK"会被这类歧义击穿。
+- defense/risk: ① 给 execa 显式传 **`encoding: "buffer"`**（属 execa `BINARY_ENCODINGS`），让 `iterable()` 交出原始 `Uint8Array`，把解码权收回自己手里；**不要**给命令加 `chcp 65001` 前缀（无效且有副作用），改为保留 `PYTHONUTF8`/`PYTHONIOENCODING`/`LANG`/`LC_ALL` 从源头统一外部程序输出编码。② 在 `decodeLine()` 中**按行（`\n` / 0x0A）边界**缓冲解码，避免多字节字符被 chunk 切断：先试 UTF-8（`fatal: true`），失败→GBK；若 UTF-8 成功但结果含 `\u0100-\u02ff`（拉丁扩展）、`\u0370-\u03ff`（希腊）、`\u0400-\u04ff`（西里尔）、`\ufffd` 或 PUA 的乱码特征**且不含任何 ASCII 字母**，则回退 GBK（ASCII 字母保护可避免误伤 `alpha=α beta=β` 这类真实希腊字母文本；已知局限：纯西里尔文整行会被误判）。③ 该路径仅在 `terminalShellIntegrationDisabled` 为 true 时启用（默认为 true，见 `ExecuteCommandTool.ts` 的 terminalKind 判定）；若走 VSCode 伪终端则由 VSCode 自行解码，属 `terminal.integrated.encoding` 配置问题，此时改回默认即可应用本修复。④ 改完必须用 **`node esbuild.mjs --production`** 重新打包才生效——漏掉 `--production` 会产出未压缩 dev 版，体积从约 14.8 MB 翻到约 31.8 MB；同时确认 `ExecaTerminalProcess.spec.ts` 仍通过（其 mock 的 `iterable()` 产出字符串，走 string 分支）。
+
+---
+### [2026-09-18] 代码库索引点【开始】无反应：delegate 重构删掉了 CodeIndexManager 的注册
+
+- symptom/intent: 代码库索引弹窗（聊天输入框旁数据库图标 / IndexingStatusBadge）里点【开始】毫无反应，状态点与文案都不变，没有任何尝试连接 Qdrant 的迹象；同时"索引工作区路径"（自定义目标目录）输入框始终不出现。
+- root cause/logic: 提交 a6fc0eedb（ClineProvider 拆分 delegate）把 getCurrentWorkspaceCodeIndexManager() 从 CodeIndexManager.getInstance(this.context) 改成 return this.codeIndexManager，却同时删掉了唯一给它赋值的 updateCodeIndexStatusSubscription() 方法体（连同 resolveWebviewView 里的调用点和 onDidChangeActiveTextEditor 监听），只在 ClineProviderBase 里留了一个签名不同的空壳 updateCodeIndexStatusSubscription(subscription)，全仓库无人调用。于是 provider.codeIndexManager 恒为 undefined：startIndexing / requestIndexingStatus 等一律走"没有打开工作区"分支，只回一条不带 workspaceEnabled 的 Error 状态；前端因 systemStatus===Error 仍显示【开始】按钮，再点还是同一条状态，看起来就是"没反应"。路径输入框的显示条件是 codebaseIndexConfig && indexingStatus.workspaceEnabled，workspaceEnabled 缺失使其恒为 false，故永不出现。另外 CodeIndexManager.isFeatureEnabled/isFeatureConfigured 由 configManager 派生，而 configManager 只在 initialize() 里创建——原代码先判断这两个 flag 再 initialize()，首次点击必然静默 return。
+- defense/risk: ① 不要用字段缓存跨工作区单例，直接 CodeIndexManager.getInstance(this.context) 动态解析（实例按工作区文件夹路径 keyed，多根切换才正确）；② 恢复 onProgressUpdate -> indexingStatusUpdate 的进度订阅，这是 workspaceEnabled / autoEnableDefault / indexWorkspacePath 传达到前端的唯一通道，遗漏它会让整个弹窗"能点但没状态"；③ startIndexing / toggleWorkspaceIndexing 必须先 await manager.initialize() 再读 isFeatureEnabled / isFeatureConfigured；④ 所有分支结束都要 postMessageToWebview({type:"indexingStatusUpdate"})，避免再次出现零反馈；⑤ 改完必须 node esbuild.mjs --production 重打包（src/dist/extension.js 约 14.8MB），否则不生效。
+- 涉及文件: src/core/webview/ClineProviderBase.ts、src/core/webview/delegates/WebviewLifecycleDelegate.ts、src/core/webview/handlers/codeIndexHandlers.ts
+- 排查手法: 先 grep 目标 UI 文案定位组件，再顺着 postMessage type 找 extension 侧 handler，最后用 grep -o "codeIndexManager[^,;)]*" src/dist/extension.js 确认字段是否真的被赋值过；git show <commit> | grep -B45 -A25 "this.codeIndexManager = " 能直接看到重构删掉了哪段。
+
+---
+

@@ -280,6 +280,20 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	isInitialized = false
 	isPaused: boolean = false
 
+	/**
+	 * Message the user typed while the task was paused (after pressing the stop button).
+	 * When present, the paused request loop resumes with this message as the next user
+	 * turn instead of re-sending the interrupted request.
+	 */
+	private pendingResumeUserMessage?: { text: string; images: string[] }
+
+	/**
+	 * True while the request loop is parked on the pause gate (`pWaitFor` below the
+	 * streaming catch). Used to decide whether `resumeWithUserMessage` should hand the
+	 * message to that gate or fall back to the regular message queue.
+	 */
+	private isWaitingOnPauseGate = false
+
 	// API
 	apiConfiguration: ProviderSettings
 	api: ApiHandler
@@ -1602,6 +1616,68 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			}
 		} catch (error) {
 			console.error("[Task#submitUserMessage] Failed to submit user message:", error)
+		}
+	}
+
+	/**
+	 * Resume a paused task with a message the user typed after pressing the stop button.
+	 *
+	 * The message is handed to the paused request loop, which uses it as the next user
+	 * turn (instead of re-sending the interrupted request). If nothing is parked on the
+	 * pause gate - e.g. the stream finished at the same moment the user hit stop - the
+	 * message is queued instead, so a message can never be silently dropped.
+	 */
+	public resumeWithUserMessage(text?: string, images?: string[]): void {
+		const messageText = text ?? ""
+		const messageImages = images ?? []
+
+		// Nothing to send: behave like the plain "Resume Task" button.
+		if (!messageText.trim() && messageImages.length === 0) {
+			this.isPaused = false
+			return
+		}
+
+		if (this.abort || this.abandoned) {
+			return
+		}
+
+		// Hand the message to the paused request loop before lifting the pause, so the
+		// loop can never observe "unpaused" without seeing the pending message.
+		if (this.isWaitingOnPauseGate) {
+			this.pendingResumeUserMessage = { text: messageText, images: messageImages }
+			this.isPaused = false
+			return
+		}
+
+		this.isPaused = false
+		this.messageQueueService.addMessage(messageText, messageImages)
+	}
+
+	/**
+	 * Persist the assistant output that had already been streamed when the user pressed
+	 * stop, so the interrupted turn stays in the conversation context.
+	 *
+	 * Only plain text is preserved: tool calls that were still streaming are dropped
+	 * (their arguments may be incomplete, and any tool results collected for them are
+	 * discarded along with the interrupted request).
+	 */
+	private async preserveInterruptedAssistantMessage(assistantMessage: string): Promise<void> {
+		const text = (assistantMessage ?? "").trim()
+
+		if (!text || this.assistantMessageSavedToHistory) {
+			return
+		}
+
+		// Mark it as saved so the normal flow can never add the same turn twice.
+		this.assistantMessageSavedToHistory = true
+
+		try {
+			await this.addToApiConversationHistory({
+				role: "assistant",
+				content: [{ type: "text" as const, text }],
+			})
+		} catch (error) {
+			console.error(`[Task#${this.taskId}] Failed to preserve interrupted assistant message:`, error)
 		}
 	}
 
@@ -3183,19 +3259,54 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						if (this.isPaused) {
 							// Clean up partial state without retry or abort
 							await abortStream("user_cancelled")
-							// Wait for resume
-							await pWaitFor(() => !this.isPaused || this.abort, { interval: 200 })
+							// Wait for resume (or for the user to just type a new message)
+							this.isWaitingOnPauseGate = true
+							try {
+								await pWaitFor(() => !this.isPaused || this.abort, { interval: 200 })
+							} finally {
+								this.isWaitingOnPauseGate = false
+							}
 							// If user chose to abort during pause, fall through to normal abort path
 							if (this.abort) {
 								this.abortReason = "user_cancelled"
 								await this.abortTask()
 								break
 							}
-							// After resume, re-push current content to retry the request
-							stack.push({
-								userContent: currentUserContent,
-								includeFileDetails: false,
-							})
+
+							const resumeMessage = this.pendingResumeUserMessage
+							this.pendingResumeUserMessage = undefined
+
+							if (resumeMessage && (resumeMessage.text.trim() || resumeMessage.images.length > 0)) {
+								// The user kept typing and sent a new message after stopping: keep whatever
+								// the model already produced in context and treat the new message as the next
+								// user turn instead of re-sending the interrupted request.
+								await this.preserveInterruptedAssistantMessage(assistantMessage)
+
+								const userMessageBlocks: Anthropic.Messages.ContentBlockParam[] = []
+
+								if (resumeMessage.text.trim()) {
+									await this.say("user_feedback", resumeMessage.text, resumeMessage.images)
+									userMessageBlocks.push({
+										type: "text" as const,
+										text: `<user_message>\n${resumeMessage.text}\n</user_message>`,
+									})
+								}
+
+								if (resumeMessage.images.length > 0) {
+									userMessageBlocks.push(...formatResponse.imageBlocks(resumeMessage.images))
+								}
+
+								stack.push({
+									userContent: userMessageBlocks,
+									includeFileDetails: false,
+								})
+							} else {
+								// Plain resume: re-push current content to retry the request
+								stack.push({
+									userContent: currentUserContent,
+									includeFileDetails: false,
+								})
+							}
 							continue
 						}
 						// Determine cancellation reason

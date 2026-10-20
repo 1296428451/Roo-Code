@@ -90,7 +90,8 @@
 	},
 	"resumeTask": {
 		"title": "恢复任务",
-		"tooltip": "继续当前任务"
+		"tooltip": "继续当前任务",
+		"typeToContinue": "输入消息即可继续对话"
 	},
 	"terminate": {
 		"title": "结束",

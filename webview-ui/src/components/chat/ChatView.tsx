@@ -163,6 +163,15 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	)
 	const autoApproveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 	const userRespondedRef = useRef<boolean>(false)
+	// Guards against sending the same "resume with message" request twice before the
+	// extension reports back that the task is no longer paused.
+	const resumeWithMessageSentRef = useRef(false)
+
+	useEffect(() => {
+		if (!isPaused) {
+			resumeWithMessageSentRef.current = false
+		}
+	}, [isPaused])
 	const [currentFollowUpTs, setCurrentFollowUpTs] = useState<number | null>(null)
 	const [aggregatedCostsMap, setAggregatedCostsMap] = useState<
 		Map<
@@ -592,6 +601,16 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					return
 				}
 
+				// The task is paused (the user pressed the stop button while the model was
+				// streaming). Typing a message and pressing enter should just continue the
+				// conversation, without having to click "Resume Task" first.
+				if (isPaused && !resumeWithMessageSentRef.current) {
+					resumeWithMessageSentRef.current = true
+					vscode.postMessage({ type: "resumeTaskWithMessage", text, images })
+					handleChatReset()
+					return
+				}
+
 				// Queue message if:
 				// - Task is busy (sendingDisabled)
 				// - API request in progress (isStreaming)
@@ -661,6 +680,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			markFollowUpAsAnswered,
 			sendingDisabled,
 			isStreaming,
+			isPaused,
 			messageQueue.length,
 			apiConfiguration?.apiProvider,
 		], // messagesRef and clineAskRef are stable
@@ -1338,7 +1358,13 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		}
 	}, [modifiedMessages.length, isStreaming, isHidden, task])
 
-	const placeholderText = task ? t("chat:typeMessage") : t("chat:typeTask")
+	// While paused, the input stays usable: typing a message simply continues the
+	// conversation, so make that explicit in the placeholder.
+	const placeholderText = isPaused
+		? t("chat:resumeTask.typeToContinue")
+		: task
+			? t("chat:typeMessage")
+			: t("chat:typeTask")
 
 	const switchToMode = useCallback(
 		(modeSlug: string): void => {
@@ -1820,7 +1846,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				ref={textAreaRef}
 				inputValue={inputValue}
 				setInputValue={setInputValue}
-				sendingDisabled={sendingDisabled || isProfileDisabled || !!isPaused}
+				sendingDisabled={sendingDisabled || isProfileDisabled}
 				selectApiConfigDisabled={sendingDisabled && clineAsk !== "api_req_failed"}
 				placeholderText={placeholderText}
 				selectedImages={selectedImages}

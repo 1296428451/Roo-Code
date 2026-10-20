@@ -171,19 +171,42 @@ create_tarball() {
     # Add package.json to extension directory for CommonJS
     echo '{"type": "commonjs"}' > "$RELEASE_DIR/extension/package.json"
 
-    # Find and copy ripgrep binary
+    # Find and copy ripgrep binary.
+    #
+    # The binary has to match the platform being packaged (rg vs rg.exe), and with
+    # pnpm `@vscode/ripgrep` can live under a nested package (apps/cli) instead of
+    # the repo root, so several locations are probed before giving up.
     info "Looking for ripgrep binary..."
-    RIPGREP_PATH=$(find "$REPO_ROOT/node_modules" -path "*/@vscode/ripgrep/bin/rg" -type f 2>/dev/null | head -1)
+    RG_BIN_NAME="rg"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) RG_BIN_NAME="rg.exe" ;;
+    esac
+
+    RIPGREP_PATH=""
+    for candidate_root in "$REPO_ROOT" "$REPO_ROOT/apps/cli" "$REPO_ROOT/src"; do
+        if [ -n "$RIPGREP_PATH" ]; then
+            break
+        fi
+        RIPGREP_PATH=$(find "$candidate_root/node_modules" -path "*/@vscode/ripgrep/bin/$RG_BIN_NAME" -type f 2>/dev/null | head -1)
+    done
+
+    # Explicit override, then a system-wide install.
+    if [ -z "$RIPGREP_PATH" ] && [ -n "$ROO_RIPGREP_PATH" ] && [ -f "$ROO_RIPGREP_PATH" ]; then
+        RIPGREP_PATH="$ROO_RIPGREP_PATH"
+    fi
+
+    if [ -z "$RIPGREP_PATH" ]; then
+        RIPGREP_PATH=$(command -v "$RG_BIN_NAME" 2>/dev/null || true)
+    fi
+
     if [ -n "$RIPGREP_PATH" ] && [ -f "$RIPGREP_PATH" ]; then
         info "Found ripgrep at: $RIPGREP_PATH"
-        mkdir -p "$RELEASE_DIR/node_modules/@vscode/ripgrep/bin"
-        cp "$RIPGREP_PATH" "$RELEASE_DIR/node_modules/@vscode/ripgrep/bin/"
-        chmod +x "$RELEASE_DIR/node_modules/@vscode/ripgrep/bin/rg"
-        mkdir -p "$RELEASE_DIR/bin"
-        cp "$RIPGREP_PATH" "$RELEASE_DIR/bin/"
-        chmod +x "$RELEASE_DIR/bin/rg"
+        mkdir -p "$RELEASE_DIR/node_modules/@vscode/ripgrep/bin" "$RELEASE_DIR/bin"
+        cp "$RIPGREP_PATH" "$RELEASE_DIR/node_modules/@vscode/ripgrep/bin/$RG_BIN_NAME"
+        cp "$RIPGREP_PATH" "$RELEASE_DIR/bin/$RG_BIN_NAME"
+        chmod +x "$RELEASE_DIR/node_modules/@vscode/ripgrep/bin/$RG_BIN_NAME" "$RELEASE_DIR/bin/$RG_BIN_NAME"
     else
-        warn "ripgrep binary not found - users will need ripgrep installed"
+        warn "ripgrep binary ($RG_BIN_NAME) not found - the packaged CLI will need ripgrep on PATH"
     fi
 
     # Create the wrapper script
@@ -201,7 +224,7 @@ const __dirname = dirname(__filename);
 // Set environment variables for the CLI
 process.env.ROO_CLI_ROOT = join(__dirname, '..');
 process.env.ROO_EXTENSION_PATH = join(__dirname, '..', 'extension');
-const ripgrepPath = join(__dirname, 'rg');
+const ripgrepPath = join(__dirname, process.platform === 'win32' ? 'rg.exe' : 'rg');
 if (existsSync(ripgrepPath)) {
   process.env.ROO_RIPGREP_PATH = ripgrepPath;
 }

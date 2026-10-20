@@ -47,6 +47,11 @@ logs
 .qodo/
 .vercel
 .roo/mcp.json
+# Tests are local-only and must never be committed.
+# NOTE: .gitignore has no effect on files that are ALREADY tracked. If `git add .`
+# still picks these up, untrack them once (keeps the files on disk):
+#   git ls-files | grep "__tests__" > /tmp/list.txt
+#   git rm --cached -r --pathspec-from-file=/tmp/list.txt
 **/__tests__
 # Qdrant
 qdrant_storage/

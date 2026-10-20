@@ -73,7 +73,8 @@
 	},
 	"resumeTask": {
 		"title": "Tiếp tục nhiệm vụ",
-		"tooltip": "Tiếp tục nhiệm vụ hiện tại"
+		"tooltip": "Tiếp tục nhiệm vụ hiện tại",
+		"typeToContinue": "Nhập tin nhắn để tiếp tục"
 	},
 	"terminate": {
 		"title": "Kết thúc",

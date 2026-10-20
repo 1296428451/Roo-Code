@@ -316,6 +316,7 @@ export interface WebviewMessage {
 		| "switchToTask"
 		| "pauseTask"
 		| "resumeTask"
+		| "resumeTaskWithMessage"
 		| "abortTask"
 		| "cancelAutoApproval"
 		| "updateVSCodeSetting"

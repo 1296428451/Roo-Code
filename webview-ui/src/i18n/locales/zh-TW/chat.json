@@ -97,7 +97,8 @@
 	},
 	"resumeTask": {
 		"title": "繼續",
-		"tooltip": "繼續目前的工作"
+		"tooltip": "繼續目前的工作",
+		"typeToContinue": "輸入訊息即可繼續對話"
 	},
 	"terminate": {
 		"title": "新工作",

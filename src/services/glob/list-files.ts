@@ -5,7 +5,7 @@ import * as childProcess from "child_process"
 import * as vscode from "vscode"
 import ignore from "ignore"
 import { arePathsEqual } from "../../utils/path"
-import { getBinPath } from "../../services/ripgrep"
+import { getBinPath, describeRipgrepSearchPaths } from "../../services/ripgrep"
 import { getDirsToIgnoreCached, DEFAULT_DIRS_TO_IGNORE } from "./ignore-config"
 
 /**
@@ -191,7 +191,7 @@ async function getRipgrepPath(): Promise<string> {
 	const rgPath = await getBinPath(vscodeAppRoot)
 
 	if (!rgPath) {
-		throw new Error("Could not find ripgrep binary")
+		throw new Error(`Could not find ripgrep binary.\n${describeRipgrepSearchPaths()}`)
 	}
 
 	return rgPath
